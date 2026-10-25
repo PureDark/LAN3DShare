@@ -1,127 +1,154 @@
-# LAN3DShare 0.7.7
+# LAN3DShare
 
-0.7.7 增加接收端自动音频保护：修复安静背景中孤立的一至两个采样尖峰，平滑限幅及实时音量变化，在播放中断恢复后短暂淡入。固定增加约 2.1 ms 音频处理延迟，不改变采样率、播放速度或视频同步许可。正常 100% 音量也保留保护，不再完全绕过处理；持续声响不会因单纯音量大就被静音。本功能需要更新接收端，发送端无需为音频保护升级。
+**Windows 局域网 2D / 3D 画面与声音共享 · LAN screen and audio sharing for Windows**
 
-0.7.6 将自动来源识别的周期进程扫描放到独立后台线程，发送线程只尝试读取已完成结果，不等待扫描。切换窗口或进程退出后会丢弃失效结果。本次修复只需更新发送端，并重新打开客户端。
+[中文](#中文) · [English](#english) · [界面预览 / UI gallery](#ui-gallery) · [下载 / Download v0.7.7](https://github.com/PureDark/LAN3DShare/releases/tag/v0.7.7)
 
-0.7.5 将普通桌面采集、缩放、接收解码及色彩转换接入 GPU 图像路径。在设置的“发送处理 GPU”中，可选择自动或实体 NVIDIA GPU；跨卡使用两端 D3D12 Copy 队列、共享堆及 GPU fence，不进行整帧 CPU 回读。接收端按显示器所在 GPU 解码和显示。图像编码仍为 NVENC，解码仍为 NVDEC。
+![LAN3DShare — device discovery and source selection](docs/screenshots/idle.png)
 
-每张显卡名称后显示 PCI 总线地址以区分同型号显卡（不是主板丝印槽号）。选择按 PCI 总线地址保存，重启后重新解析当前显卡。GPU 不可用时提示重新选择，正式硬件模式不会悄悄切换为 CPU 缩放/软件编码。主视频没有整帧 CPU 图像处理；界面卡片仍每秒读回一次 GPU 缩小后的缩略图，压缩码流收发、控制与音频由 CPU 处理。
+<a id="中文"></a>
+## 中文
 
-0.7.4 增加实时音频电平：发送端显示“系统采集 / 已发送”，接收端显示“已接收 / 播放输出”，可查看静音、等待同步、暂停和设备不可用状态。另修复当前声卡返回异常时间戳导致音频始终无法发出的问题。
+LAN3DShare 将普通桌面或游戏交织前的 **SBS 双眼画面**发送到局域网中的另一台电脑，并同步传输系统声音。发送与接收使用同一个图形客户端，无需命令行。接收端可在小窗口中预览，也可在 LeiaSR 显示器上全屏显示 3D。
 
+### 功能
 
-Windows x64 局域网画面共享。两台电脑使用同一个图形客户端，自动发现彼此；点击连接的一方发送，对方自动打开接收窗口。支持普通桌面和 DX11 / DX12 LeiaSR 交织前的 L|R SBS，不需要逐个修改游戏 Mod，也不依赖 ToDesk。
+- **发送、接收一体**：自动发现局域网客户端，选中对方并点击“连接并发送”。一次连接一台设备。
+- **普通屏幕与 3D 来源**：共享整块屏幕、选择运行中的 3D 程序、打开指定程序，或使用内置 3D 测试画面。
+- **DX11 / DX12 SBS 采集**：通过 `SimulatedRealityDirectX.dll` 接入交织前的左右眼画面，支持已运行程序的热附加及兼容的 TitanLeiaBridge 转发路径，尽量避免逐个修改 Mod。具体 API、ABI 与资源约束见技术记录。
+- **GPU 图像管线**：DirectX 采集、复制、缩放与颜色转换，NVENC 编码、NVDEC 解码；支持 AV1、HEVC / H.265、H.264，按硬件能力选择。
+- **可选择发送 GPU**：用 PCI 总线地址区分同型号显卡；跨 GPU 使用两端 D3D12 Copy 队列和共享资源传递图像。
+- **自由接收窗口**：可移动、拉伸，支持全屏；只有收到 LeiaSR SBS 且进入全屏时，才调用接收机本地 runtime 交织。
+- **画质与带宽控制**：720p / 1080p / 2K / 4K，30 / 60 / 90 / 120 FPS 目标；码率滑条 0–1000 Mbps，整百吸附。0 为自动，非零低于 20 时按 20 Mbps 使用。
+- **系统声音与同步**：跟随实际呈现的视频推进音频，处理跳帧、暂停和重连；两端实时音量表，接收端 0–800% 播放音量可随时调整。
+- **接收端爆音保护**：保守修复孤立采样尖峰，平滑限幅与音量变化，断流恢复淡入；固定增加约 2.1 ms 音频处理延迟。
 
-0.7.2 修正“打开程序…”模式中 Steam 重启游戏进程后仍等待旧进程画面的问题。现在按所选 EXE 的完整规范路径复用已运行的唯一实例，并在该实例退出后跟随同路径的唯一替代实例；等待 LeiaSR 和游戏窗口就绪后热附加。修复加载期间同步扫描的锁冲突后，真实《如龙7外传》已完成 Steam 进程切换和不重启游戏再次分享；用户随后通过正式 GUI 持续分享，确认画面与 3D 正常。0.7.3 将音量控制改为接收端实时播放音量；接收端量化显示帧率、物理声画同步及调整后的音量听感仍需分别验证，具体证据见 `VALIDATION.md`。
+### 下载与开始使用
 
-## 使用
+1. 在两台电脑上下载 [LAN3DShare-0.7.7-win64.zip](https://github.com/PureDark/LAN3DShare/releases/download/v0.7.7/LAN3DShare-0.7.7-win64.zip)，解压后双击 `LAN3DShare.exe`。这是**免安装 ZIP 包**；请保留同目录的 `LAN3DCapture.dll`。私有仓库的下载需要登录有访问权限的 GitHub 账号。
+2. 两台电脑接入可互通的 IPv4 局域网。若 Windows 弹出防火墙提示，允许程序在所用的专用网络通信。
+3. 在发送方选择“分享内容”和接收电脑，点击 **连接并发送**。对方会自动打开接收窗口。
+4. 如需 3D，先在源程序中启用 LeiaSR。接收方进入 **全屏显示**（F11 或双击画面），由接收机的 LeiaSR runtime 交织。Esc 退出全屏。
+5. 声音偏小时，在**接收方**调节“播放音量”，无需重连，也无需改变发送方 Windows 音量。任一端断开即可结束共享，不会关闭源游戏。
 
-1. 两台电脑解压发布包，双击 **LAN3DShare.exe**。保留旁边的 `LAN3DCapture.dll`。需要 Microsoft Visual C++ x64 运行库和 Microsoft Edge WebView2 Runtime。
-2. 在发送方选择“分享内容”，再从设备列表选中接收方，点击 **连接并发送**。
-3. 对方自动出现可移动、可拉伸的小窗口。点击 **全屏显示**，或双击画面、按 F11 切换全屏；Esc 还原窗口。
-4. 任一端点击 **断开连接**，或接收方关闭画面窗口，即可结束共享。客户端保持打开时可以再次接收或发送。
+**更新到 0.7.7：**结束共享、退出需要更新的客户端，再解压覆盖其程序目录并重新打开。已有设置保留。音频保护需要更新**接收端**；此版本未改动游戏内采集 DLL，无需为这次更新重启游戏。未来若替换已加载的采集 DLL，则需重启对应游戏。
 
-| 发送方实际取得的画面 | 接收窗口 | 接收全屏 |
+### 环境与 3D 显示规则
+
+需要 Windows x64、Microsoft Visual C++ x64 运行库、Microsoft Edge WebView2 Runtime，以及具备所用编解码能力的 NVIDIA 显卡与驱动。生产硬件路径不会自动退回 CPU 图像处理。仅共享普通画面时，不需要 LeiaSR。
+
+3D 接收需要受支持的 LeiaSR 显示器及已安装的 runtime。设置中默认目录为 `C:\Program Files\LeiaSR\Platform\bin`；使用 TitanLeiaBridge 时选择其完整 runtime DLL 目录。发布包不附带厂商 runtime。
+
+| 收到的画面 | 窗口模式 | 全屏模式 |
 | --- | --- | --- |
-| 普通桌面 | 普通 2D 画面，保持比例 | 普通 2D 画面，不加载 LeiaSR |
-| LeiaSR 交织前 SBS | 左眼 2D 预览，保持比例 | 使用接收机自己的 LeiaSR runtime 交织 |
+| 普通桌面 | 2D 显示 | 2D 显示 |
+| LeiaSR SBS | 左眼 2D 预览 | 接收机本地 LeiaSR 交织 |
+| LeiaSR runtime 不可用 | 2D 预览并提示 | 回退为 2D 窗口，保留连接 |
 
-退出全屏、最小化，或收到普通画面时，会撤销接收端交织。未安装或无法初始化 LeiaSR 时，恢复为 2D 窗口并显示提示，连接保留。普通共享无需安装 LeiaSR。
+双方共享同一对游戏视图，各自在本机交织；接收方的头部移动不会产生独立游戏视角。
 
-点击右上角设置图标，可以修改本机名称、默认接收屏幕和 runtime 目录。官方目录默认是 `C:\Program Files\LeiaSR\Platform\bin`；使用 TitanLeiaBridge 时选择其完整 runtime DLL 目录。目录中的“已找到”仅表示存在所需 DLL，实际交织在接收全屏时初始化。程序包不包含厂商 runtime。
+### 画质、性能与当前范围
 
-界面直接复用 `design/lan3dshare-ui.html` 的 HTML/CSS/SVG，通过 WebView2 嵌入 EXE，无需浏览器或本地 Web 服务。窗口、弹层、接收画面控件使用原稿样式；程序及任务栏图标从原稿左上角 SVG 导出为带透明通道的多尺寸 ICO。普通预览与正在收发的缩略图来自实际帧，等待画面时会标明占位。
+- **4K 表示整个 SBS 为 3840×2160，而非每眼 4K。**默认目标为 4K / 60 FPS / 200 Mbps，实际帧率取决于源程序、显卡、网络与接收显示链路。
+- 主视频走 GPU，不整帧回读到 CPU；仍有必要的 GPU 复制和颜色转换。界面缩略图、音频、控制和压缩码流处理仍使用 CPU。
+- 视频采用 SDR、8-bit、4:2:0 有损压缩，暂不支持 HDR / 10-bit；自动码率基于实际发送反馈，不等同于独立带宽测速。
+- 当前一次只支持一发一收；不提供键鼠远程控制、设备身份认证或传输加密，面向可信局域网。
+- 只支持兼容的 Windows x64 来源。桌面鼠标指针尚未合成，不支持旋转屏；并非所有 Mod、未来 runtime ABI 或 DX12 资源形式都已验证。
+- 热附加、GPU 传输、实际游戏和双机显示的验证范围分别记录在 [VALIDATION.md](VALIDATION.md)，不以单项编码吞吐代替端到端验收。
 
-## GPU 采集与 4K
+设备未出现时，检查防火墙、网段与无线客户端隔离；等待 3D 时，确认选对来源且源程序持续输出 LeiaSR。日志可从 **设置 → 查看日志** 打开。历史实现细节见 [技术记录（中文）](docs/TECHNICAL_NOTES.zh-CN.md)。
 
-0.7.0 的 NVIDIA 硬件编码路径直接接收 DX11/DX12 共享 GPU 纹理，在发送端 GPU 上缩放并转换为 NV12 后交给 NVENC。游戏内不再把整张 SBS 读回 CPU；复制前按目标帧率限频，纹理复用必须同时满足 GPU 完成、原命令列表退役和消费者释放。发送端落后时丢弃未领取的旧帧，不等待网络，也不覆盖正在编码的纹理。小预览每秒只读回一次最多 432 像素的缩略图。
+<a id="english"></a>
+## English
 
-0.7.1 默认给 GPU 采集保留 20% 帧率余量，60 FPS 输出对应最多 72 FPS 采集，吸收编码耗时波动。共享 GPU 输入的 4K AV1/HEVC 在支持至少两个 NVENC 引擎时自动使用双引擎分片；保留 P5、AQ 和原码率，不支持时使用普通模式。无需命令行或额外设置。
+LAN3DShare sends a regular desktop or a game's **pre-weave side-by-side stereo image** to another computer on the local network, together with synchronized system audio. One graphical application handles both sending and receiving. Preview the stream in a movable window, or display it in 3D on a LeiaSR monitor in fullscreen.
 
-0.7.1 阶段的真实《如龙7外传》60 秒发送专项测得 59.90 个新帧/秒、总 SBS 3840×2160、约 199 Mbps；游戏截图为分享前 236、期间 229–231、停止后 238 FPS。该历史结果使用本机只收压缩包的接收器，不是 0.7.2 的双机显示验收；P95 帧间隔约 27.9 ms，也不代表每一帧均在 16.67 ms 内完成。
+### Features
 
-0.7.2 已通过真实局域网连接 `HUANGWEI-GAMING`（192.168.3.197），由远端图形客户端打开接收进程。总 SBS 3840×2160、AV1 NVENC 自动双引擎分片，两轮目标码率 600 / 200 Mbps 的主要发送区间分别为 53.22 / 59.31 FPS，均确认停止采集后游戏仍运行。这是约 25 秒会话内的发送吞吐和控制连接验证，不代表接收端显示帧率或严格稳定达到 60 FPS。后续正式 GUI 分享已获用户画面/3D 正常及远端出声的确认，同时反馈声音偏小；物理声画同步尚未测量。
+- **One app for both roles.** Automatically discover LAN peers. Select a computer and connect to become the sender; one receiver per session.
+- **Desktop and stereo sources.** Share a screen, select a running 3D application, launch a chosen executable, or use the built-in stereo test pattern.
+- **DX11 / DX12 pre-weave capture.** Hook `SimulatedRealityDirectX.dll` to obtain left/right SBS frames, including hot attachment to running applications and compatible TitanLeiaBridge forwarding implementations. This avoids per-Mod changes where the supported interfaces and resource layouts are available.
+- **GPU video processing.** DirectX capture, copies, scaling and color conversion; NVIDIA NVENC encoding and NVDEC decoding. AV1, HEVC / H.265 and H.264 are selected according to hardware support.
+- **Selectable sending GPU.** PCI bus addresses distinguish identical GPUs. Cross-adapter transport uses D3D12 Copy queues on both GPUs and shared resources.
+- **Flexible viewing.** Move or resize the receiver window; enter fullscreen for local LeiaSR weaving only when the stream is identified as LeiaSR SBS.
+- **Quality controls.** 720p / 1080p / 2K / 4K and target rates of 30 / 60 / 90 / 120 FPS. The 0–1000 Mbps slider snaps near multiples of 100; 0 means automatic, and nonzero values below 20 use 20 Mbps.
+- **Synchronized system audio.** Audio follows presented video through frame drops, pauses and reconnections. Both ends show audio levels; receiver-local playback volume adjusts live from 0–800%.
+- **Receiver audio protection.** Conservative isolated-spike repair, smooth limiting and volume transitions, and a fade-in after interruptions. Fixed processing delay is approximately 2.1 ms.
 
-4K 选项表示 **SBS 总画面 3840×2160**。例如源画面 7680×2160 会在 GPU 上压为半宽 SBS，每眼 1920×2160；传输原始单眼比例，接收窗口恢复正确比例，全屏按接收机自身 LeiaSR 进行交织。该路径避免完整图像经过 CPU，仍包含必要的 GPU 纹理复制、缩放及颜色转换。
+### Download and quick start
 
-实际游戏帧率及端到端性能以 `VALIDATION.md` 的实测范围为准。GPU 专项编码吞吐不等同于游戏、网络、接收显示共同达到 60 FPS。更换已经加载进游戏的采集 DLL 需要退出该游戏后生效；同版本反复连接无需重启游戏。
+1. Download [LAN3DShare-0.7.7-win64.zip](https://github.com/PureDark/LAN3DShare/releases/download/v0.7.7/LAN3DShare-0.7.7-win64.zip) on both computers, extract it, and open `LAN3DShare.exe`. This is a **portable ZIP**, not an installer. Keep `LAN3DCapture.dll` next to the executable. Private-repository downloads require a GitHub account with repository access.
+2. Connect both computers to a reachable IPv4 LAN. Allow the app through Windows Firewall on the private network in use if prompted.
+3. On the sender, choose the source and destination computer, then click **连接并发送 / Connect and send**. The receiver window opens automatically.
+4. For stereo, enable LeiaSR in the source application. On the receiver, use **全屏显示 / Fullscreen**, F11, or double-click the image. Esc returns to windowed mode.
+5. Adjust **播放音量 / Playback volume** on the receiver while connected. No reconnect or sender Windows-volume change is needed. Disconnecting does not close the source game.
 
-## 分享内容
+**Updating to 0.7.7:** end the session, exit the client being updated, extract the new files over its application directory, and reopen it. Existing settings are retained. Update the **receiver** to enable audio protection. This release keeps the capture DLL unchanged, so this update does not require a game restart. Future changes to a capture DLL already loaded by a game require restarting that game.
 
-**屏幕（自动识别 3D）**：默认共享所选屏幕。发送端检查该屏幕的前台程序，发现其加载 `SimulatedRealityDirectX.dll` 后安装采集 hook。只有确实收到该进程新发布的交织前 SBS，才标为 LeiaSR；普通桌面帧始终标为 Desktop。画面类型随每个视频帧传给接收方，不靠接收方猜测。
+### Requirements and display behavior
 
-**运行中的 3D 程序**：点击刷新可列出已加载 LeiaSR DLL 的程序。选择已经运行、正在显示 LeiaSR 的游戏即可分享；断开后可以再次连接，同一版本内无需重启游戏、切换 3D 或逐个修改 Mod。没有可用 SBS 时显示普通屏幕，并报告等待或回退原因。
+Windows x64, the Microsoft Visual C++ x64 runtime, Microsoft Edge WebView2 Runtime, and NVIDIA GPUs/drivers supporting the selected encoding and decoding formats. The production hardware path does not silently fall back to CPU image processing. Regular 2D sharing does not require LeiaSR.
 
-0.6.0 增加新版 DX11/DX12 已创建 weaver 的热附加：从实际加载的实现 DLL 的类型信息和 setter 代码推导接口与输入字段，在原对象下一次 weave 时读取现有 SBS 和 context/command list。支持直接 DLL 及 TitanLeiaBridge 一类转发 DLL，不按 runtime 版本号写死私有偏移。旧接口继续使用公开输入调用/getter。不能确认的布局不会猜读；DX12 需要观察到后续命令列表的资源转换，刚接入时可能跳过第一帧。
+Stereo reception requires a supported LeiaSR display and an installed runtime. The default runtime directory is `C:\Program Files\LeiaSR\Platform\bin`; for TitanLeiaBridge, select its complete runtime DLL directory. Vendor runtimes are not included.
 
-0.6.1 修正热附加初始化对源游戏的干扰：图形入口探测移到发送端进程，游戏内不再为探测创建临时设备、队列或交换链。旧版临时交换链曾触发《如龙7外传》Mod 的队列切换保护，使 3D 场景停留在旧画面；已经触发该状态的游戏需要重启一次。
+| Incoming content | Windowed | Fullscreen |
+| --- | --- | --- |
+| Regular desktop | 2D | 2D |
+| LeiaSR SBS | Left-eye 2D preview | Locally woven by the receiver's LeiaSR runtime |
+| Unavailable LeiaSR runtime | 2D preview with a notice | Falls back to a 2D window without ending the connection |
 
-**打开程序…**：选择实际游戏/应用 EXE，再点击连接。已有唯一同路径实例时复用；没有运行实例时先启动。该模式不再向启动阶段的进程预先注入，而是等待 `SimulatedRealityDirectX.dll` 已加载、可见主窗口能响应消息；连续两次间隔约 2 秒的检查均就绪后才热附加，不修改游戏磁盘文件。0.7.2 支持 Steam 让初始进程退出、再启动同一游戏 EXE 的情况：旧实例退出后重新查找所选 EXE 的完整规范路径，不依赖父子进程关系，也不会仅凭同名 EXE 接入其他目录的程序。仍需选择实际游戏 EXE，不能用任意启动器替代。
+Both computers share the same pair of game views and weave locally. Receiver head movement does not create an independent game viewpoint.
 
-如果有多个同路径实例，程序不会猜选；请在“运行中的 3D 程序”中选择具体进程。等待替代实例时显示“源程序正在切换进程，等待接入实际游戏…”；等待初始化时显示“正在等待源程序完成初始化并启用 LeiaSR…”。切换实例会清理旧采集总线和画面缓存，重建编码并从关键帧恢复；只有实际取得新的 SBS 后才标为 3D。已连接时预览标签按收到的画面显示，不再一直提示“连接后启动”。
+### Quality, performance and scope
 
-《如龙7外传》可选择已经运行的 `likeadragongaiden.exe`，保持游戏的 LeiaSR 输出后连接；接收窗口全屏后才交织。新版热附加直接恢复现有 weaver 的输入，不依赖 Mod 重新创建它。实际验证范围见 `VALIDATION.md`。
+- **4K means a total packed SBS size of 3840×2160, not 4K per eye.** Defaults target 4K / 60 FPS / 200 Mbps; end-to-end performance depends on the source, GPUs, network and receiver display.
+- Main video frames remain on the GPU, with necessary copies and color conversion. UI thumbnails, audio, control and compressed-stream handling still use the CPU.
+- Video is lossy SDR, 8-bit, 4:2:0. HDR / 10-bit is not supported. Automatic bitrate reacts to actual transmission feedback; it is not a separate link-speed test.
+- One sender and one receiver per session. Remote keyboard/mouse input, device authentication and transport encryption are not implemented; this is intended for trusted LANs.
+- Compatible Windows x64 sources only. Desktop cursor composition and rotated displays are not supported. Not every Mod, future runtime ABI or DX12 resource configuration has been validated.
+- [VALIDATION.md](VALIDATION.md) separates capture tests, GPU throughput, real-game checks and dual-computer display evidence; an encoder benchmark is not an end-to-end guarantee.
 
-**3D 测试画面**：无需游戏即可检查连接、窗口及全屏流程。
+If peers are missing, check firewall rules, subnets and Wi-Fi client isolation. If the app is waiting for stereo, verify the selected source is actively rendering LeiaSR frames. Open logs via **设置 → 查看日志 / Settings → View logs**. Detailed implementation history is retained in [Chinese technical notes](docs/TECHNICAL_NOTES.zh-CN.md).
 
-共享的是源程序产生的同一对视图；双方分别用本机眼位进行交织。接收方移动头部不会生成独立的游戏视角。断开连接不关闭源游戏；停止后采集 DLL 和 hook 留在源进程中，以保护仍被 weaver/命令列表引用的代码。更新采集 DLL 后应重新启动源程序。
+<a id="ui-gallery"></a>
+## 界面预览 / UI gallery
 
-## 网络与画质
+以下截图由当前内嵌 HTML 界面使用示例数据生成，延续原设计稿。它们展示控件与状态，**不是实际游戏或实时连接截图，也不代表图中帧率实测结果**。当前程序界面为中文；本文提供中英文说明。
 
-设备发现使用 UDP 48731 广播；控制与视频使用自动选择的 TCP 端口。两台电脑需要在可互通的 IPv4 局域网中。如果 Windows 弹出网络访问提示，允许客户端在所用的专用网络通信。设备列表一直为空时，检查防火墙及无线网络的客户端隔离。当前一次连接一台设备，同一客户端不能同时发送和接收。
+These previews render the current embedded HTML UI with sample data, based on the original design. They show controls and states, **not a live game/session or measured performance**. The current application UI is Chinese; this README is bilingual.
 
-画质默认 **4K / 60 FPS / 200 Mbit/s**。分辨率可选 720p、1080p、2K、4K，帧率可选 30、60、90、120。码率滑条范围 **0–1000 Mbps**，每整百显示圆点，拖动到附近时吸附；键盘可按 1 Mbps 精调。**0 为自动**，非零值低于 20 时按 20 Mbps 使用。SBS 总画面上限 3840×2160，保持比例且不放大源图；左右眼分开缩放，普通画面整体缩放。这些是目标上限，实际帧率受源程序、采集、显卡、网络和显示影响。接收速率按每秒新解码画面数统计。
-
-自动码率从 200 Mbps 开始，根据实际视频发送的耗时、字节数与持续背压调整，范围 20–1000 Mbps。拥塞时下降，有持续余量且码流实际使用了足够预算时缓慢上调；静态画面不会因为码流很小就持续升档。它是实时传输反馈，不是精确的链路容量测速，接收端处理过慢也可能导致降档。手动设置不启用网络自适应。
-
-网络拥塞时，发送端不排队积压源画面，接收端解码后只保留最新完整帧用于显示。H.265/AV1 的参考帧不能随意跳过；TCP 半包超时后，会关闭整条媒体连接，清掉旧积压，并在同一会话内重新握手、重建解码器，从新关键帧恢复。恢复期间保留最后完整画面，最多等待 6 秒；主动断开仍立即生效。自动码率遇到发送超时会降低目标，并跨媒体重连保留该目标；手动码率不会被静默改动，持续拥塞时应降低码率或选择自动。
-
-连接时接收端报告实际硬解能力，按双方支持情况优先 **NVENC AV1 → HEVC（H.265）→ H.264**。接收端使用 **NVDEC**，色彩转换也在 GPU 上完成。没有共同硬件能力时回退 Windows 软件 H.264，目标上限限制为 1080p30/20 Mbit/s，运行状态会显示回退。硬件路径直接调用 NVIDIA 驱动，不需要用户安装 CUDA SDK、FFmpeg 或商店视频扩展；本版 NVENC 接口要求支持 Video Codec SDK 13.0 的驱动。
-
-高码率 AV1/HEVC 旨在保留游戏和立体细节，但仍为 8-bit SDR、4:2:0 有损压缩，彩色细字等场景可能看出差异。双引擎分片增加并行度，也可能略降压缩效率。LeiaSR 硬件采集至 NVENC 已避免完整图像经过 CPU；普通桌面/软件回退仍走 CPU，接收端 GPU 转 BGRA 后仍读回并上传显示，因此尚非完整的端到端 GPU 零拷贝。
-
-共享屏幕、程序或内置 3D 测试画面时，默认同时采集发送电脑的**系统播放声音**，在接收电脑的默认输出设备播放，无需另开音频程序。采集的是默认播放设备上的混音，不采集麦克风，也不按游戏进程单独过滤。音频为 48 kHz、双声道、16-bit PCM，约增加 1.54 Mbps；系统会处理声卡原生采样率的转换。
-
-接收声音偏小时，在**接收端**的接收页面或画面窗口顶部调节 **播放音量**，传输过程中实时生效，无需断开重连。范围 **0–800%**，默认 **100% 保留收到的原始幅度**，0% 静音；接收端记住设置，下次连接自动沿用。全屏 3D 隐藏工具栏时，可用 **Ctrl＋↑／↓** 每次调整 25 个百分点。发送端不需要设置，仍发送原始采集 PCM。增益在接收端即将播放前应用，带尖峰修复和峰值保护，固定增加约 2.1 ms 预看延迟，不改变时间戳、视频许可、重连代号或 Windows 主音量。已有最多约 20 ms 的设备音频会先播放完；实时调节音量使用 5 ms 渐变。接收端升级到 0.7.7 后自动启用保护，无需额外开关。
-
-音量表的填充为 RMS，细线及数值为峰值（dBFS，越接近 0 越大）；“静音”表示收到全零采样，“—”表示近期没有采样或状态已过期。主界面约每 200 ms 更新，画面窗口约每 100 ms 更新。发送端的“已发送”只在音频包写入连接成功后计量；接收端的“播放输出”在音量缩放后、成功提交 WASAPI 后计量，不包含 Windows 主音量、应用会话静音或物理音箱状态。全屏 LeiaSR 仍隐藏全部叠层，避免覆盖交织图，可在主界面查看电平。
-
-若 WASAPI 报告的采集时间戳偏离本机 QPC 超过 2 秒，使用设备采样位置和一次本地时钟锚点恢复有界时间轴，并显示“已校正音频时钟”；正常时间戳不变。该退路没有修改系统时钟或引入音频队列，但异常设备的首个时间锚点是估计值，仍需实际听感确认声画偏差。
-
-声音使用与视频相同的发送端时钟，并跟随接收端**实际呈现的画面**推进。视频跳帧时丢弃落后的音频；画面停止更新、窗口最小化或被遮挡时，不继续消费未来的声音。网络半包失败、断开或重连都会清空旧音频队列，只有新连接的画面显示后才恢复声音。静止桌面在采集仍健康时刷新时间轴，允许音乐持续播放；SBS 源停止提交时不会假装画面仍在更新。播放队列有上限，不会通过不断积压来掩盖卡顿；故障恢复可能有短暂静音。
-
-会话 token 用于把控制连接与媒体连接对应起来。本版没有设备身份认证、加密、远程输入或多接收端功能，按可信局域网设计。设置与日志保存在 `%LOCALAPPDATA%\LAN3DShare`，可以从界面打开日志。默认音频设备失效或切换后会自动重试，音频不可用时视频继续运行，原因写入日志。
-
-## 兼容范围
-
-| 项目 | 当前支持 |
+| 状态 / State | 预览 / Preview |
 | --- | --- |
-| 普通画面 | DXGI Desktop Duplication 整屏采集，自动恢复显示模式变化；暂未合成鼠标指针，不支持旋转屏 |
-| DLL 接入 | 挂钩进程实际 DLL 的导出解析结果，可跟随转发 DLL，不依赖固定地址或版本字符串 |
-| 新 DX11 / DX12 | 公开 CreateDX11Weaver / CreateDX12Weaver 工厂及接口方法，保留 query/destroy 身份 |
-| 旧 DX11 / DX12 | 公开构造、输入、context/command list、weave 导出；没有观察到完整状态则跳过 |
-| 接收 runtime | 新 DX11 工厂不可用时回退 PredictingDX11Weaver，适配 TitanLeiaBridge 的 legacy DX11 路径 |
-| ABI | 按 LeiaSR SDK 1.36.2 公开 C++ 接口编译；ABI 变化仍需适配，不能保证任意未来 runtime |
-| DX11 纹理 | 立即上下文，RGBA8/BGRA8 SDR、非 MSAA；按 SRV/RTV 实际 mip 与单 slice 捕获 |
-| DX12 纹理 | Direct command list，RGBA8/BGRA8 SDR、单 mip/slice、非 MSAA；必须观察到当前录制中的明确传统资源状态转换 |
-| DX12 未知状态 | enhanced barrier、未观察到状态或不支持的资源会跳过并报告，不猜测状态 |
-| 色彩 | SDR sRGB，H.264 / HEVC / AV1，NV12 BT.709 limited range，4:2:0 有损；暂不支持 HDR/10-bit/float |
-| 架构 | Windows x64；不支持 32-bit 或受保护的源进程 |
+| 选择分享来源 / Choose a source | ![Source picker](docs/screenshots/picker.png) |
+| 画质控件局部 / Quality controls (detail) | ![Quality controls](docs/screenshots/quality.png) |
+| 发送状态与音量表 / Sending and audio levels | ![Sending](docs/screenshots/sending.png) |
+| 接收、全屏与实时音量 / Receiving, fullscreen and live volume | ![Receiving](docs/screenshots/receiving.png) |
+| GPU、显示器与 runtime / GPU, display and runtime | ![Settings](docs/screenshots/settings.png) |
+| 独立接收窗口 / Separate viewer window | ![Viewer](docs/screenshots/viewer.png) |
 
-自动识别依据实际采集结果。热附加尚未捕获到 weaver、应用停止提交 SBS 或不满足资源约束时，只能共享普通桌面；如果源桌面本身已经交织，这种降级不能还原为干净的单眼画面。
+## 构建与项目结构 / Building and project layout
 
-## 开发与验证
+构建需要 Windows x64、Visual Studio 2026 C++ 工具链、Windows SDK、支持 Visual Studio 18 2026 生成器的 CMake 和 LeiaSR SDK 1.36.2。SDK 需单独安装，并传入你自己的路径。用户运行发布包无需编译或使用命令行。
 
-用户发布包只需运行 `LAN3DShare.exe`。源码另保留 `LAN3DSender` / `LAN3DReceiver` 作为开发诊断和自动化测试入口，不进入用户发布包。
-
-构建需要 Windows x64、Visual Studio 2026 C++ 工具链、Windows SDK、CMake 和 LeiaSR SDK：
+Build with Windows x64, the Visual Studio 2026 C++ toolchain, Windows SDK, CMake with the Visual Studio 18 2026 generator, and LeiaSR SDK 1.36.2. Install the SDK separately and supply its path. End users do not need a compiler or command line.
 
 ```powershell
-.\build.ps1 -SdkRoot 'F:\GithubMods\LeiaSR-SDK-1.36.2-win64'
-.\package.ps1
+.\build.ps1 -SdkRoot 'C:\SDKs\LeiaSR-SDK-1.36.2-win64'
 ```
 
-GUI、会话发现、采集、编解码、传输、接收显示、系统声音的源代码分别位于 `src/ui`、`src/session`、`src/capture`、`src/media`、`src/net`、`src/receiver`、`src/audio`。CPU 采集总线保持 v2，GPU 共享纹理使用独立的小型元数据总线，媒体协议为 v5；两端建议一起升级到 0.7.5，0.7.0 / 0.7.1 同为 v5，0.6.x 及更早版本会明确提示协议不兼容。音量控制只调整本机接收播放，不改变媒体协议。诊断入口可用 `--no-audio` 关闭音频，接收端可用 `--volume-percent 0..800` 指定初始播放音量。旧版发送端 `AudioGainPercent` 设置及参数已移除。
+开发入口位于 `build/package`；`LAN3DSender` / `LAN3DReceiver` 为诊断工具，正式用户包使用一体化 `LAN3DShare.exe`。发布打包脚本会校验二进制与符号配对，并要求收齐 `package.ps1` 中列出的验证材料。
 
-验证范围见 `VALIDATION.md`。本机回环、模拟 runtime 和 WARP 测试不替代真实双机局域网、游戏 Mod、LeiaSR/Titan 显示效果及性能验收。SDK 头文件间接引用 OpenCV，工程延迟链接 SDK 的 `opencv_world343.lib`；产品代码不调用 OpenCV，也不静态链接 Leia runtime。MinHook 与 nv-codec-headers 许可证随包附带。
+Build outputs are in `build/package`. `LAN3DSender` / `LAN3DReceiver` are diagnostic tools; the user package contains the unified `LAN3DShare.exe`. Release packaging verifies binary/PDB pairs and requires the evidence files listed in `package.ps1`.
+
+| Path | 内容 / Contents |
+| --- | --- |
+| `src/ui`, `design` | 图形界面与设计稿 / UI and original design |
+| `src/capture`, `src/app` | 桌面、SBS 采集与来源接入 / Desktop/SBS capture and source attachment |
+| `src/media`, `src/net`, `src/session` | GPU 编解码、传输与发现 / GPU codecs, transport and discovery |
+| `src/receiver`, `src/audio` | 显示、LeiaSR 与音频同步 / Presentation, LeiaSR and audio synchronization |
+| `tests`, `tools` | 测试与诊断 / Tests and diagnostics |
+| `docs/screenshots` | README 示例截图 / Documentation previews |
+
+截图生成器为 [`tools/GenerateReadmeScreenshots.cjs`](https://github.com/PureDark/LAN3DShare/blob/master/tools/GenerateReadmeScreenshots.cjs)，使用 Playwright 与 Microsoft Edge。第三方依赖及各自许可证保留在 [`third_party`](https://github.com/PureDark/LAN3DShare/tree/master/third_party)。
+
+Documentation previews are generated by [`tools/GenerateReadmeScreenshots.cjs`](https://github.com/PureDark/LAN3DShare/blob/master/tools/GenerateReadmeScreenshots.cjs) using Playwright and Microsoft Edge. Third-party components and their respective licenses are retained in [`third_party`](https://github.com/PureDark/LAN3DShare/tree/master/third_party).

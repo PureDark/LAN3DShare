@@ -22,6 +22,14 @@ if ($VerifyOnly) { $pairs; return }
 # Only this explicit list is packaged. Never recurse over build/package, which
 # also contains CLI utilities, tests, and fake vendor runtime fixtures.
 $documentation = @(
+    @{ source = 'docs\TECHNICAL_NOTES.zh-CN.md'; destination = 'docs\TECHNICAL_NOTES.zh-CN.md' },
+    @{ source = 'docs\screenshots\idle.png'; destination = 'docs\screenshots\idle.png' },
+    @{ source = 'docs\screenshots\picker.png'; destination = 'docs\screenshots\picker.png' },
+    @{ source = 'docs\screenshots\quality.png'; destination = 'docs\screenshots\quality.png' },
+    @{ source = 'docs\screenshots\sending.png'; destination = 'docs\screenshots\sending.png' },
+    @{ source = 'docs\screenshots\receiving.png'; destination = 'docs\screenshots\receiving.png' },
+    @{ source = 'docs\screenshots\settings.png'; destination = 'docs\screenshots\settings.png' },
+    @{ source = 'docs\screenshots\viewer.png'; destination = 'docs\screenshots\viewer.png' },
     @{ source = 'build-opt\test-results\audio-protection.xml'; destination = 'validation\audio-protection.xml' },
     @{ source = 'build-opt\test-results\audio-protection-sender-observation.json'; destination = 'validation\async-scan-live-observation.json' },
     @{ source = 'build-opt\test-results\async-process-scan.xml'; destination = 'validation\async-process-scan.xml' },
