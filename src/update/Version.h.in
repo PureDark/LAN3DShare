@@ -1,0 +1,2 @@
+#pragma once
+#define LAN3D_VERSION "@PROJECT_VERSION@"

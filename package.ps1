@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$VerifyOnly, [string]$BuildDirectory = 'build')
 
 $ErrorActionPreference = 'Stop'
@@ -6,7 +6,7 @@ Set-StrictMode -Version 2.0
 $workspace = [IO.Path]::GetFullPath($PSScriptRoot)
 . (Join-Path $workspace 'scripts\Verify-SymbolPair.ps1')
 
-$version = '0.7.8'
+$version = '0.7.9'
 $baseName = "LAN3DShare-$version"
 $productionNames = @('LAN3DShare.exe', 'LAN3DCapture.dll')
 $buildRoot = [IO.Path]::GetFullPath((Join-Path $workspace $BuildDirectory))
@@ -22,6 +22,12 @@ if ($VerifyOnly) { $pairs; return }
 # Only this explicit list is packaged. Never recurse over build/package, which
 # also contains CLI utilities, tests, and fake vendor runtime fixtures.
 $documentation = @(
+    @{ source = 'build-opt\test-results\updater\installer-restart-tests.xml'; destination = 'validation\updater-restart-tests.xml' },
+    @{ source = 'build-opt\test-results\updater\tests.xml'; destination = 'validation\updater-tests.xml' },
+    @{ source = 'build-opt\test-results\updater\installer.json'; destination = 'validation\updater-install.json' },
+    @{ source = 'build-opt\test-results\updater\ui.json'; destination = 'validation\updater-ui.json' },
+    @{ source = 'build-opt\test-results\updater\download.json'; destination = 'validation\updater-download.json' },
+    @{ source = 'docs\screenshots\updater.png'; destination = 'docs\screenshots\updater.png' },
     @{ source = 'build-opt\test-results\viewer-autohide\native.xml'; destination = 'validation\viewer-autohide-native.xml' },
     @{ source = 'build-opt\test-results\viewer-autohide\result.json'; destination = 'validation\viewer-autohide.json' },
     @{ source = 'docs\TECHNICAL_NOTES.zh-CN.md'; destination = 'docs\TECHNICAL_NOTES.zh-CN.md' },

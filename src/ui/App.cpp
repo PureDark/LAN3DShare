@@ -1,3 +1,5 @@
+#include "update/Updater.h"
+#include "Version.h"
 #include "media/GpuAdapter.h"
 #include "AudioMeterModel.h"
 #include "App.h"
@@ -158,6 +160,7 @@ struct App {
     HINSTANCE instance{}; HWND window{}; WebViewHost web;
     std::filesystem::path executable, dataDir, smokePath; std::string smokeState{"idle"};
     std::wstring testRole; uint16_t testPort{}, testTarget{};
+    std::unique_ptr<update::Client> updater; bool updateReserved{};
     Settings settings; std::vector<Display> displays; std::vector<Source> sources; std::vector<session::Peer> peers;
     std::string selectedSource, selectedPeer, contentKind{"desktop"}, preview, receivedPreview;
     session::Service service; session::Peer current; std::string token; uint64_t incoming{};
@@ -203,6 +206,7 @@ struct App {
             {"elapsedSeconds", phase == Phase::Sending || phase == Phase::Receiving ? std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - phaseTime).count() : 0},
             {"stats", videoRecovering ? (phase == Phase::Sending && settings.rate != 0 ? "正在恢复视频连接；码率过高时请降低或选择自动" : "网络暂时拥塞，正在恢复画面…") : Utf8(encodingSummary)},
             {"maximized", IsZoomed(window) != FALSE}, {"sources", Json::array()}, {"peers", Json::array()}, {"monitors", Json::array()}};
+        m["update"] = updater ? updater->Model() : Json{{"current", LAN3D_VERSION}, {"status", "idle"}, {"message", "检查 GitHub 最新版本"}, {"busy", false}, {"authorized", false}};
         m["gpus"] = Json::array();
         for (const auto& gpu : media::EncodeAdapters()) m["gpus"].push_back({{"id", gpu.id}, {"name", "GPU " + std::to_string(gpu.index) + " · " + Utf8(gpu.name) + (gpu.id.starts_with("pci:") ? "（PCI " + gpu.id.substr(4) + "）" : "（PCI 地址不可用）")}});
         for (size_t i = 0; i < displays.size(); ++i) m["monitors"].push_back({{"id", i}, {"name", Utf8(displays[i].name)}, {"width", displays[i].width}, {"height", displays[i].height}});
@@ -273,6 +277,18 @@ struct App {
         try {
             const auto j = Json::parse(text); const auto action = j.value("action", std::string{});
             if (action == "ready") { uiReady = true; Publish(); return; }
+            if (action.starts_with("update") && updater) {
+                if (phase != Phase::Idle || closing || worker.Running() || updater->Busy()) return;
+                if (action == "updateCheck") updater->Check();
+                else if (action == "updateDownload") updater->Download();
+                else if (action == "updateInstall") updater->Install();
+                else if (action == "updateSaveToken") updater->SaveToken(j.value("token", std::string{}));
+                else if (action == "updateForgetToken") updater->ForgetToken();
+                else if (action == "updateTokenHelp") ShellExecuteW(window, L"open", L"https://github.com/settings/personal-access-tokens/new?name=LAN3DShare%20Updates&target_name=PureDark&contents=read", nullptr, nullptr, SW_SHOWNORMAL);
+                updateReserved = updater->Busy();
+                if (updateReserved) service.SetState(session::State::Busy);
+                Publish(); return;
+            }
             if (action == "saveSettings" && (phase != Phase::Idle || closing)) {
                 web.Post(Json{{"type", "settingsSaved"}, {"ok", false}, {"error", "正在共享画面，请断开后再保存设置。"}}.dump()); return;
             }
@@ -379,7 +395,7 @@ struct App {
         worker.RequestStop(); phase = Phase::Stopping; phaseTime = Clock::now(); SetNote(std::move(message)); Publish();
     }
     void BeginSend() {
-        if (phase != Phase::Idle || smoke || !networkReady) return;
+        if (phase != Phase::Idle || smoke || !networkReady || updateReserved) return;
         RefreshPeers();
         auto p = std::find_if(peers.begin(), peers.end(), [&](const session::Peer& item) { return item.id == selectedPeer && item.state == session::State::Idle; });
         auto s = std::find_if(sources.begin(), sources.end(), [&](const Source& item) { return item.id == selectedSource; });
@@ -409,7 +425,7 @@ struct App {
     }
     void BeginReceive(const session::Event& event) {
         std::string ignored;
-        if (phase != Phase::Idle || closing) { service.Reply(event.requestId, false, "Client is busy", ignored); return; }
+        if (phase != Phase::Idle || closing || updateReserved) { service.Reply(event.requestId, false, "Client is busy", ignored); return; }
         current = event.peer; token = event.token; incoming = event.requestId; contentKind = "desktop"; encodingSummary.clear(); preview.clear(); receivedPreview.clear(); videoRecovering = false;
         displays = Displays(); const int monitor = displays.empty() ? 0 : std::clamp(settings.monitor, 0, int(displays.size()) - 1);
         std::vector<std::wstring> args{L"--profile", L"--connect", Wide(event.peer.address), L"--port", std::to_wstring(event.mediaPort), L"--session-token", Wide(token),
@@ -424,6 +440,8 @@ struct App {
         std::ofstream out(dataDir / (testRole + L"-result.txt")); out << (testSucceeded ? "PASS" : "FAIL") << " role=" << Utf8(testRole) << " discovered=" << peers.size() << " connected=" << testConnected << '\n';
     }
     void Tick() {
+        if (updater && updater->TakeExitRequest()) { SaveVolume(); closing = true; DestroyWindow(window); return; }
+        if (updateReserved && updater && !updater->Busy()) { updateReserved = false; if (phase == Phase::Idle) service.SetState(session::State::Idle); }
         if (volumeSavePending && Clock::now() - volumeChangedAt >= std::chrono::milliseconds(400)) SaveVolume();
         ++ticks; worker.Poll(); if (uiReady && web.Ready()) ++readyTicks;
         if (!smoke) for (const auto& event : service.PollEvents()) {
@@ -559,6 +577,7 @@ int RunApplication(HINSTANCE instance, int argc, wchar_t** argv) {
         singleton = CreateMutexW(nullptr, FALSE, (L"Local\\LAN3DShare.UI." + Wide(app.settings.id)).c_str());
         if (GetLastError() == ERROR_ALREADY_EXISTS) { if (auto h = FindWindowW(L"LAN3DShareMain", nullptr)) { ShowWindow(h, SW_RESTORE); SetForegroundWindow(h); } CloseHandle(singleton); return 0; }
     }
+    if (!app.smoke && app.testRole.empty()) app.updater = std::make_unique<update::Client>(app.executable, app.dataDir);
     app.StartService();
     WNDCLASSW c{}; c.hInstance = instance; c.lpfnWndProc = App::Proc; c.lpszClassName = L"LAN3DShareMain"; c.hCursor = LoadCursorW(nullptr, IDC_ARROW); c.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(101)); RegisterClassW(&c);
     const UINT dpi = GetDpiForSystem();

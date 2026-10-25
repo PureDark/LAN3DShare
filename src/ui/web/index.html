@@ -589,6 +589,26 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
           <div class="found" id="runtime-status"><span class="dot"></span>已找到 LeiaSR 运行时</div>
           <div class="f-help">只在全屏显示 3D 画面时使用。<br>使用 TitanLeiaBridge 时，选择它的完整运行时目录。</div>
         </div>
+        <div class="field" id="update-panel">
+          <div class="f-label">程序更新<span id="update-current">当前版本 —</span></div>
+          <div class="f-help" id="update-status" role="status" aria-live="polite">点击检查 GitHub 最新正式版本</div>
+          <progress id="update-progress" max="100" value="0" hidden style="width:100%;margin-top:10px"></progress>
+          <div class="btns" style="justify-content:flex-start;flex-wrap:wrap;margin-top:10px">
+            <button class="btn plain" id="update-check">检查更新</button>
+            <button class="btn plain" id="update-download" hidden>下载更新</button>
+            <button class="btn solid" id="update-install" hidden>安装并重启</button>
+          </div>
+          <details style="margin-top:12px" id="update-auth">
+            <summary class="f-help" style="cursor:pointer">GitHub 下载授权 <span id="update-auth-state"></span></summary>
+            <div class="f-help">私有仓库需首次填写访问令牌，保存在本机 Windows 凭据管理器中。选择 PureDark / LAN3DShare 仓库，仅授予 Contents 的 Read-only 权限。</div>
+            <input class="input" id="update-token" type="password" autocomplete="off" spellcheck="false" maxlength="256" placeholder="粘贴 GitHub 访问令牌" aria-label="GitHub 访问令牌" style="margin-top:8px">
+            <div class="btns" style="justify-content:flex-start;flex-wrap:wrap;margin-top:8px">
+              <button class="btn plain" id="update-token-help">创建访问令牌</button>
+              <button class="btn plain" id="update-save-token">保存授权</button>
+              <button class="btn plain" id="update-forget-token">清除授权</button>
+            </div>
+          </details>
+        </div>
       </div>
       <div class="m-foot">
         <button class="text-btn" id="open-logs">
@@ -832,6 +852,26 @@ function renderSettings() {
   $$('#settings-monitors button, .js-close').forEach(button => { button.disabled = settingsSaving; });
 }
 
+function renderUpdate() {
+  const update = model.update || {};
+  const busy = !!update.busy;
+  text('#update-current', `当前版本 ${update.current || '—'}`);
+  text('#update-status', update.message || '点击检查 GitHub 最新正式版本');
+  const progress = $('#update-progress');
+  progress.hidden = update.status !== 'downloading'; progress.value = update.progress || 0;
+  $('#update-check').disabled = busy || !isIdle();
+  text('#update-check', update.status === 'checking' ? '检查中…' : '检查更新');
+  $('#update-download').hidden = !update.hasUpdate || ['ready', 'installing'].includes(update.status);
+  $('#update-download').disabled = busy || !isIdle();
+  text('#update-download', update.status === 'downloading' ? `下载中 ${update.progress || 0}%` : `下载 ${update.latest || '更新'}`);
+  $('#update-install').hidden = !['ready', 'installing'].includes(update.status);
+  $('#update-install').disabled = busy || !isIdle();
+  text('#update-install', update.status === 'installing' ? '正在准备重启…' : '安装并重启');
+  text('#update-auth-state', update.authorized ? '· 已保存' : '· 未设置');
+  for (const id of ['update-token', 'update-token-help', 'update-save-token', 'update-forget-token']) $('#' + id).disabled = busy || !isIdle();
+  $('#update-forget-token').hidden = !update.authorized;
+}
+
 function openSettings() {
   if (isViewer()) { post('settings'); return; }
   if (!isIdle()) return;
@@ -853,6 +893,7 @@ function closePanel() {
   draft = null;
   settingsError = '';
   browsePending = false;
+  $('#update-token').value = '';
   draw();
 }
 
@@ -956,7 +997,7 @@ function drawMain() {
   const selectedPeer = peers.find(peer => String(peer.id) === String(model.selectedPeer));
   const selectedSource = model.sources.find(source => String(source.id) === String(model.selectedSource));
   const canConnect = isIdle() && selectedSource && selectedPeer && (!selectedPeer.state || selectedPeer.state === 'idle');
-  $('#connect').disabled = !canConnect;
+  $('#connect').disabled = !canConnect || !!model.update?.busy;
   $('#link').classList.toggle('live', model.phase === 'sending');
   $('#link').classList.toggle('ready', model.phase !== 'sending' && !!selectedPeer && peers.length > 0);
   $('#q-chip').classList.toggle('on', state === 'quality');
@@ -1013,6 +1054,7 @@ function draw() {
   if (isViewer()) drawViewer(); else drawMain();
   renderVolume();
   renderAudio();
+  renderUpdate();
   $$('.resize-handle').forEach(handle => { handle.hidden = !!model.fullscreen || !!model.maximized; });
 }
 
@@ -1141,6 +1183,15 @@ $('#save-settings').onclick = () => {
   post('saveSettings', values);
 };
 $('#open-logs').onclick = () => post('logs');
+$('#update-check').onclick = () => { if (!$('#update-check').disabled) post('updateCheck'); };
+$('#update-download').onclick = () => { if (!$('#update-download').disabled) post('updateDownload'); };
+$('#update-install').onclick = () => { if (!$('#update-install').disabled) post('updateInstall'); };
+$('#update-token-help').onclick = () => post('updateTokenHelp');
+$('#update-save-token').onclick = () => {
+  const token = $('#update-token').value.trim(); $('#update-token').value = '';
+  if (token) post('updateSaveToken', { token });
+};
+$('#update-forget-token').onclick = () => { $('#update-token').value = ''; post('updateForgetToken'); };
 $('#tip-toggle').onclick = () => { $('#tip').hidden = !$('#tip').hidden; };
 $('#go-full').onclick = () => post('fullscreen');
 $('#viewer-fullscreen').onclick = () => post('fullscreen');

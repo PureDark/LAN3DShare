@@ -102,7 +102,7 @@ uint32_t Number(const wchar_t* value, uint32_t maximum) {
     return static_cast<uint32_t>(result);
 }
 void Help() {
-    std::cout << "LAN3DShare Sender 0.7.8 (Windows x64)\n"
+    std::cout << "LAN3DShare Sender 0.7.9 (Windows x64)\n"
         "  --list                              List processes using LeiaSR DirectX\n"
         "  --pid PID                           Capture a selected application\n"
         "  --launch EXE [--args TEXT]           Start or reuse an application and follow its LeiaSR process\n"
