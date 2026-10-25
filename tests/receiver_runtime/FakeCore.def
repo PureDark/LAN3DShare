@@ -1,0 +1,5 @@
+LIBRARY SimulatedRealityCore
+EXPORTS
+    ?create@SRContext@SR@@SAPEAV12@W4NetworkMode@12@@Z=ReceiverCreateContext
+    ?initialize@SRContext@SR@@QEAAXXZ=ReceiverInitializeContext
+    ?deleteSRContext@SRContext@SR@@SAXPEAV12@@Z=ReceiverDeleteContext

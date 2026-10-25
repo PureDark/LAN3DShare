@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LAN3DShare · 界面设计稿</title>
+<style>
+:root {
+  --page: #E7EAF0;
+  --win: #F8F9FB;
+  --surface: #FFFFFF;
+  --line: #E4E7ED;
+  --line-2: #EEF0F4;
+  --ink: #12161C;
+  --ink-2: #565F6D;
+  --ink-3: #98A0AD;
+  --accent: #3355FF;
+  --accent-ink: #2443E6;
+  --accent-soft: #EDF0FF;
+  --ok: #14A06A;
+  --danger: #DC3F45;
+  --warn: #B7770C;
+  --warn-soft: #FFF5E1;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 24px 48px;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+svg.i.sm { width: 15px; height: 15px; }
+svg.i.lg { width: 22px; height: 22px; }
+
+/* ---------- 设计稿外壳 ---------- */
+.doc { width: 780px; margin-bottom: 18px; }
+.doc-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.doc-title b { font-size: 16px; font-weight: 600; }
+.doc-title span { font-size: 12.5px; color: var(--ink-2); }
+.switch { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 10px; background: #DADEE6; }
+.switch button { font-size: 12px; padding: 5px 11px; border-radius: 7px; color: var(--ink-2); }
+.switch button:hover { color: var(--ink); }
+.switch button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(16, 24, 40, .08); }
+.caption { width: 780px; margin-top: 18px; font-size: 12.5px; line-height: 1.7; color: var(--ink-2); text-align: center; }
+
+/* ---------- 主窗口 ---------- */
+.win {
+  width: 780px; height: 540px;
+  background: var(--win);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, .08), 0 28px 64px -24px rgba(16, 24, 40, .28);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.titlebar { height: 40px; flex: none; display: flex; align-items: center; padding-left: 16px; }
+.app { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
+.titlebar .sp { flex: 1; }
+.tb-btn { width: 34px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--ink-2); margin-right: 8px; }
+.tb-btn:hover { background: #ECEEF2; color: var(--ink); }
+.wc { width: 46px; height: 40px; display: grid; place-items: center; color: var(--ink-2); }
+.wc svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; }
+.wc:hover { background: #ECEEF2; }
+.wc.x:hover { background: #E81123; color: #fff; }
+
+.stage { flex: 1; min-height: 0; padding: 0 32px; display: grid; align-content: center; align-items: start; }
+.stage.send { grid-template-columns: 1fr 72px 1fr; }
+.stage.recv { grid-template-columns: 1.15fr 1fr; gap: 40px; align-items: center; }
+.col { position: relative; }
+.label { height: 18px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
+.label b { font-weight: 600; color: var(--ink-2); }
+.label .aux { margin-left: auto; }
+
+/* 分享内容卡片 */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 8px; }
+.preview { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #0F121A; display: flex; }
+.preview svg { width: 100%; height: 100%; display: block; }
+.half { flex: 1; position: relative; min-width: 0; }
+.half + .half { box-shadow: -1px 0 0 rgba(255, 255, 255, .6); }
+.eye { position: absolute; top: 7px; left: 8px; font: 600 9.5px/1 "Segoe UI", sans-serif; letter-spacing: .06em; color: rgba(255, 255, 255, .85); }
+.badge {
+  position: absolute; left: 8px; bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 9px; border-radius: 999px;
+  font-size: 11px; color: #fff;
+  background: rgba(12, 15, 22, .55); backdrop-filter: blur(6px);
+}
+.meta { display: flex; align-items: center; gap: 12px; padding: 12px 6px 4px 8px; }
+.meta .t { flex: 1; min-width: 0; }
+.n { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s { font-size: 12px; color: var(--ink-3); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.ghost {
+  height: 30px; padding: 0 10px 0 9px; border-radius: 8px;
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12.5px; color: var(--ink-2);
+  border: 1px solid var(--line); background: var(--surface);
+}
+.ghost:hover { background: #F4F6F9; color: var(--ink); }
+
+/* 连线 */
+.link { height: 0; margin-top: 122px; position: relative; }
+.link::before {
+  content: ""; position: absolute; left: 8px; right: 8px; top: -1px; height: 2px;
+  background: linear-gradient(90deg, #C9CFD9 50%, transparent 0) 0 0 / 8px 2px repeat-x;
+}
+.link .node {
+  position: absolute; left: 50%; top: 0; transform: translate(-50%, -50%);
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink-3);
+  transition: all .2s;
+}
+.link.ready::before { background-image: linear-gradient(90deg, var(--accent) 50%, transparent 0); }
+.link.ready .node { color: var(--accent); border-color: #C9D2FF; }
+.link.live::before { background-image: linear-gradient(90deg, var(--accent) 50%, transparent 0); background-size: 10px 2px; animation: flow .5s linear infinite; }
+.link.live .node { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 0 5px var(--accent-soft); }
+@keyframes flow { to { background-position: 10px 0; } }
+
+/* 设备列表 */
+.peers { display: flex; flex-direction: column; gap: 8px; }
+.peer {
+  display: grid; grid-template-columns: 38px 1fr auto; gap: 12px; align-items: center;
+  padding: 11px 14px 11px 11px; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.peer:hover { border-color: #D2D7E0; }
+.peer .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: #F2F4F7; color: var(--ink-2); transition: all .15s; }
+.peer .n { font-size: 14px; }
+.radio { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #C8CED8; transition: border .15s; }
+.peer.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.peer.sel .ic { background: var(--accent-soft); color: var(--accent); }
+.peer.sel .radio { border: 5.5px solid var(--accent); }
+.peer.busy { cursor: default; }
+.peer.busy:hover { border-color: var(--line); }
+.peer.busy .ic, .peer.busy .t { opacity: .5; }
+.tag { font-size: 11.5px; color: var(--ink-3); background: #F2F4F7; padding: 3px 8px; border-radius: 999px; }
+
+/* 寻找设备 */
+.radar {
+  min-height: 236px; padding: 22px 26px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  border: 1px dashed #D3D8E1; border-radius: 16px;
+}
+.pulse { position: relative; width: 44px; height: 44px; margin-bottom: 18px; display: grid; place-items: center; color: var(--accent); }
+.pulse i { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--accent); opacity: 0; animation: ping 2.4s ease-out infinite; }
+.pulse i:nth-child(2) { animation-delay: .8s; }
+.pulse i:nth-child(3) { animation-delay: 1.6s; }
+.pulse .core { position: relative; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); }
+@keyframes ping { 0% { transform: scale(.6); opacity: .55; } 100% { transform: scale(1.9); opacity: 0; } }
+.radar h3 { font-size: 14.5px; font-weight: 600; }
+.radar p { margin-top: 6px; font-size: 12.5px; line-height: 1.65; color: var(--ink-2); }
+.tip-link { margin-top: 14px; font-size: 12px; color: var(--accent); }
+.tip { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #F1F3F7; font-size: 12px; line-height: 1.75; color: var(--ink-2); text-align: left; }
+
+/* 发送中的目标 */
+.target { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; }
+.target .head { display: flex; align-items: center; gap: 12px; }
+.target .ic { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.clock { margin-top: 22px; font: 300 34px/1 "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: .01em; font-variant-numeric: tabular-nums; }
+.state-line { margin-top: 8px; display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ok); }
+.target .note { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-2); font-size: 12.5px; line-height: 1.65; color: var(--ink-2); }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; flex: none; }
+.dot.live { animation: live 1.8s infinite; }
+@keyframes live { 0% { box-shadow: 0 0 0 0 rgba(20, 160, 106, .45); } 70% { box-shadow: 0 0 0 6px rgba(20, 160, 106, 0); } 100% { box-shadow: 0 0 0 0 rgba(20, 160, 106, 0); } }
+
+/* 接收中 */
+.recv-name { margin-top: 2px; font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
+.recv-desc { margin-top: 14px; font-size: 13px; line-height: 1.7; color: var(--ink-2); }
+.recv-desc b { color: var(--ink); font-weight: 600; }
+.recv .primary { margin-top: 22px; }
+.hint { margin-top: 10px; font-size: 12px; color: var(--ink-3); }
+kbd { font: 600 10.5px/1 "Segoe UI", sans-serif; padding: 3px 6px; border-radius: 5px; background: rgba(255, 255, 255, .22); }
+
+/* 底栏 */
+.foot { height: 76px; flex: none; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line-2); }
+.msg { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
+.msg b { font-weight: 600; color: var(--ink); }
+.mono { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.primary {
+  height: 40px; padding: 0 18px 0 20px; border-radius: 10px;
+  display: inline-flex; align-items: center; gap: 9px;
+  font-size: 14px; font-weight: 600; color: #fff; background: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 8px 18px -8px rgba(51, 85, 255, .7);
+  transition: background .15s;
+}
+.primary:hover { background: var(--accent-ink); }
+.primary:disabled { background: #CBD2E2; box-shadow: none; cursor: default; }
+.secondary { height: 40px; padding: 0 18px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--danger); background: var(--surface); border: 1px solid var(--line); }
+.secondary:hover { border-color: #F0C5C7; background: #FFF7F7; }
+
+/* 画质 */
+.actions { display: flex; align-items: center; gap: 10px; }
+.q-chip {
+  height: 40px; padding: 0 11px 0 14px; border-radius: 10px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+  background: var(--surface); border: 1px solid var(--line);
+  transition: border-color .15s, box-shadow .15s;
+}
+.q-chip:hover { color: var(--ink); border-color: #D2D7E0; }
+.q-chip .chev { color: var(--ink-3); transition: transform .15s; }
+.q-chip.on { color: var(--ink); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.q-chip.on .chev { transform: rotate(180deg); color: var(--accent); }
+.qpop {
+  position: absolute; right: 32px; bottom: 70px; width: 384px; z-index: 5; padding: 18px 18px 14px;
+  background: var(--surface); border-radius: 16px;
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, .08), 0 22px 44px -14px rgba(16, 24, 40, .3);
+}
+.q-head { display: flex; align-items: center; justify-content: space-between; }
+.q-head b { font-size: 14.5px; font-weight: 600; }
+.q-head button { font-size: 12px; color: var(--ink-3); }
+.q-head button:hover { color: var(--accent); }
+.q-sec { margin-top: 16px; }
+.q-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; font-size: 12.5px; font-weight: 600; }
+.q-row span { font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
+.seg { display: flex; padding: 3px; border-radius: 10px; background: #F1F3F6; }
+.seg button { flex: 1; height: 30px; border-radius: 7px; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.seg button:hover { color: var(--ink); }
+.seg button.on { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(16, 24, 40, .1), 0 0 0 1px rgba(16, 24, 40, .04); }
+.q-hint { margin-top: 8px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.q-hint svg { color: var(--ink-3); }
+.q-note { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line-2); display: flex; gap: 8px; font-size: 11.5px; line-height: 1.6; color: var(--ink-3); }
+.q-note svg { margin-top: 1px; }
+
+/* 内容选择浮层 */
+.scrim { position: absolute; inset: 0; z-index: 4; }
+.pop {
+  position: absolute; top: 26px; left: -6px; width: 340px; z-index: 5; padding: 6px;
+  background: var(--surface); border-radius: 14px;
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, .08), 0 22px 44px -14px rgba(16, 24, 40, .3);
+}
+.grp { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px 4px; font-size: 11.5px; color: var(--ink-3); }
+.grp button { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: var(--ink-3); }
+.grp button:hover { background: #F2F4F7; color: var(--ink); }
+.opt { width: 100%; display: grid; grid-template-columns: 32px 1fr 16px; gap: 12px; align-items: center; padding: 7px 10px; border-radius: 10px; text-align: left; }
+.opt:hover { background: #F4F6F9; }
+.opt .ic { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: #F2F4F7; color: var(--ink-2); }
+.opt .n { font-size: 13.5px; font-weight: 500; }
+.opt .s { font-size: 11.5px; margin-top: 1px; }
+.opt .ck { color: var(--accent); visibility: hidden; }
+.opt.on .ck { visibility: visible; }
+.opt.on .ic { background: var(--accent-soft); color: var(--accent); }
+.sep { height: 1px; margin: 6px 8px; background: var(--line-2); }
+
+/* 设置 */
+.modal-wrap { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(18, 22, 30, .3); }
+.modal { width: 472px; background: var(--surface); border-radius: 16px; overflow: hidden; box-shadow: 0 32px 64px -24px rgba(16, 24, 40, .5); }
+.m-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 16px 4px 24px; }
+.m-head h2 { font-size: 17px; font-weight: 600; }
+.m-head button { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; color: var(--ink-2); }
+.m-head button:hover { background: #F2F4F7; }
+.m-body { padding: 0 24px; }
+.field { padding: 14px 0 16px; border-bottom: 1px solid var(--line-2); }
+.field:last-child { border-bottom: 0; }
+.f-label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; font-size: 13px; font-weight: 600; }
+.f-label span { font-size: 12px; font-weight: 400; color: var(--ink-3); }
+.f-help { margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--ink-3); }
+.input {
+  width: 100%; height: 36px; padding: 0 12px; border-radius: 9px; outline: none;
+  font: inherit; font-size: 13.5px; color: var(--ink);
+  background: #FAFBFC; border: 1px solid var(--line);
+}
+.input:focus { background: #fff; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mons { display: flex; gap: 10px; }
+.mon { flex: 1; display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 12px; border: 1px solid var(--line); text-align: left; }
+.mon:hover { border-color: #D2D7E0; }
+.mon .shape { width: 44px; height: 30px; display: flex; align-items: center; justify-content: center; }
+.mon .shape i { display: block; border: 1.5px solid #B9C0CC; border-radius: 3px; background: #F4F6F9; }
+.mon .n { font-size: 13px; }
+.mon .s { font-size: 11.5px; }
+.mon.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mon.on .shape i { border-color: var(--accent); background: var(--accent-soft); }
+.path { display: flex; gap: 8px; }
+.path .input { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--ink-2); }
+.path .ghost { height: 36px; padding: 0 14px; flex: none; }
+.found { margin-top: 9px; display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ok); }
+.m-foot { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px 16px; background: #FAFBFC; border-top: 1px solid var(--line-2); }
+.text-btn { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+.text-btn:hover { color: var(--ink); }
+.m-foot .btns { display: flex; gap: 8px; }
+.btn { height: 36px; padding: 0 16px; border-radius: 9px; font-size: 13.5px; font-weight: 600; }
+.btn.plain { border: 1px solid var(--line); background: var(--surface); }
+.btn.plain:hover { background: #F4F6F9; }
+.btn.solid { background: var(--accent); color: #fff; }
+.btn.solid:hover { background: var(--accent-ink); }
+
+/* 画面窗口 */
+.viewer {
+  width: 720px; height: 440px; position: relative; overflow: hidden;
+  border-radius: 10px; background: #07080C;
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, .2), 0 28px 64px -24px rgba(16, 24, 40, .45);
+}
+.viewer > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.v-bar { position: absolute; inset: 0 0 auto; height: 60px; padding: 0 10px 12px 18px; display: flex; align-items: center; gap: 10px; color: #fff; background: linear-gradient(rgba(6, 8, 12, .72), rgba(6, 8, 12, 0)); }
+.v-bar .n { font-size: 13px; }
+.v-bar .sp { flex: 1; }
+.chip { padding: 3px 8px; border-radius: 999px; font-size: 11px; color: #fff; background: rgba(255, 255, 255, .16); }
+.v-btn { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; color: #fff; }
+.v-btn:hover { background: rgba(255, 255, 255, .14); }
+.v-hint { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); white-space: nowrap; padding: 7px 14px; border-radius: 999px; font-size: 12px; color: #fff; background: rgba(8, 10, 16, .55); backdrop-filter: blur(8px); }
+.v-toast {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; white-space: nowrap;
+  padding: 9px 10px 9px 14px; border-radius: 12px;
+  font-size: 12.5px; color: var(--ink); background: rgba(255, 255, 255, .97);
+  box-shadow: 0 16px 32px -12px rgba(0, 0, 0, .5);
+}
+.v-toast .w { color: var(--warn); display: flex; }
+.v-toast button { height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.v-toast button:hover { background: var(--accent-soft); }
+</style>
+</head>
+<body data-state="idle">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="g-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F2B57"/>
+      <stop offset=".5" stop-color="#7C69A6"/>
+      <stop offset=".82" stop-color="#EE9F86"/>
+      <stop offset="1" stop-color="#F7CDA5"/>
+    </linearGradient>
+    <g id="sky"><rect width="160" height="90" fill="url(#g-sky)"/><circle cx="108" cy="55" r="12" fill="#FFE5C0"/></g>
+    <g id="far"><path d="M-12 68 L16 50 L38 60 L66 36 L92 58 L118 46 L172 66 V90 H-12Z" fill="#4B4A7E"/></g>
+    <g id="near"><path d="M-12 78 L28 62 L58 74 L92 57 L126 72 L172 63 V90 H-12Z" fill="#202448"/><path d="M-12 86 L50 80 L110 86 L172 81 V90 H-12Z" fill="#141733"/></g>
+    <g id="grid"><rect width="160" height="90" fill="#141823"/><path d="M0 15H160M0 30H160M0 45H160M0 60H160M0 75H160M20 0V90M40 0V90M60 0V90M80 0V90M100 0V90M120 0V90M140 0V90" stroke="#FFFFFF" stroke-opacity=".07" stroke-width=".6"/><rect x="0" y="84" width="23" height="6" fill="#E8E8E8"/><rect x="23" y="84" width="23" height="6" fill="#E8D44A"/><rect x="46" y="84" width="23" height="6" fill="#4AD0D8"/><rect x="69" y="84" width="22" height="6" fill="#4ACB62"/><rect x="91" y="84" width="23" height="6" fill="#D24AC8"/><rect x="114" y="84" width="23" height="6" fill="#D8484A"/><rect x="137" y="84" width="23" height="6" fill="#3E52E0"/></g>
+    <g id="target"><circle cx="80" cy="42" r="24" fill="none" stroke="#5C76FF" stroke-width="1.4"/><circle cx="80" cy="42" r="12" fill="none" stroke="#FFFFFF" stroke-opacity=".5" stroke-width=".8"/><circle cx="80" cy="42" r="2.6" fill="#FFFFFF"/></g>
+  </defs>
+</svg>
+
+<div class="doc">
+  <div class="doc-title"><b>LAN3DShare</b><span>界面设计稿 · 点击下方切换状态，窗口内也可直接操作</span></div>
+  <div class="switch" id="switch">
+    <button data-s="idle">选择设备</button>
+    <button data-s="picker">选择内容</button>
+    <button data-s="quality">画质</button>
+    <button data-s="searching">寻找设备</button>
+    <button data-s="sending">发送中</button>
+    <button data-s="receiving">接收中</button>
+    <button data-s="settings">设置</button>
+    <button data-s="viewer">画面窗口</button>
+    <button data-s="viewer-fallback">无 3D 运行时</button>
+  </div>
+</div>
+
+<!-- ================= 主窗口 ================= -->
+<div class="win" data-show="idle picker quality searching sending receiving settings">
+  <div class="titlebar">
+    <div class="app">
+      <svg width="18" height="18" viewBox="0 0 20 20"><rect x="1.5" y="4" width="10" height="12" rx="3" fill="#3355FF"/><rect x="8.5" y="4" width="10" height="12" rx="3" fill="#3355FF" fill-opacity=".32"/></svg>
+      LAN3DShare
+    </div>
+    <div class="sp"></div>
+    <button class="tb-btn" id="open-settings" title="设置" data-show="idle picker quality searching settings">
+      <svg class="i" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+    </button>
+    <button class="wc"><svg viewBox="0 0 10 10"><path d="M0 5h10"/></svg></button>
+    <button class="wc"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button>
+    <button class="wc x"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
+  </div>
+
+  <!-- 发送侧布局：分享内容 → 发送到 -->
+  <div class="stage send" data-show="idle picker quality searching sending settings">
+    <div class="col">
+      <div class="label"><span data-show="idle picker quality searching settings">分享内容</span><span data-show="sending">正在分享</span></div>
+      <div class="card">
+        <div class="preview" id="preview"></div>
+        <div class="meta">
+          <div class="t">
+            <div class="n" id="src-name">屏幕 1</div>
+            <div class="s" id="src-sub">2560 × 1440 · 自动识别 3D</div>
+          </div>
+          <button class="ghost" id="open-picker" data-show="idle picker quality searching settings">
+            更换
+            <svg class="i sm" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="pop" data-show="picker">
+        <div class="grp">屏幕</div>
+        <button class="opt on" data-src="s1">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg></span>
+          <span><div class="n">屏幕 1</div><div class="s">2560 × 1440 · 自动识别 3D</div></span>
+          <svg class="i sm ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+        <button class="opt" data-src="s2">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg></span>
+          <span><div class="n">屏幕 2</div><div class="s">3840 × 2160 · 自动识别 3D</div></span>
+          <svg class="i sm ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+        <div class="grp">正在运行的 3D 程序
+          <button title="刷新"><svg class="i sm" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button>
+        </div>
+        <button class="opt" data-src="p1">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></span>
+          <span><div class="n">Cyberpunk2077.exe</div><div class="s">已加载 LeiaSR，直接采集 3D 画面</div></span>
+          <svg class="i sm ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+        <div class="sep"></div>
+        <button class="opt" data-src="launch">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+          <span><div class="n">打开程序…</div><div class="s">连接时启动，从第一帧开始采集</div></span>
+          <svg class="i sm ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+        <button class="opt" data-src="test">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></span>
+          <span><div class="n">3D 测试画面</div><div class="s">无需游戏，检查连接与全屏</div></span>
+          <svg class="i sm ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="link" id="link"><div class="node"><svg class="i sm" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+
+    <div class="col">
+      <div class="label">
+        <span data-show="idle picker quality searching settings">发送到</span>
+        <span data-show="sending">正在发送给</span>
+        <span class="aux" data-show="idle picker quality settings">局域网 · 3 台</span>
+      </div>
+
+      <div class="peers" data-show="idle picker quality settings">
+        <button class="peer sel" data-name="客厅电脑" data-ip="192.168.1.25" data-icon="monitor">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg></span>
+          <span class="t"><div class="n">客厅电脑</div><div class="s">192.168.1.25</div></span>
+          <span class="radio"></span>
+        </button>
+        <button class="peer" data-name="工作室 · Odyssey 3D" data-ip="192.168.1.31" data-icon="monitor">
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg></span>
+          <span class="t"><div class="n">工作室 · Odyssey 3D</div><div class="s">192.168.1.31</div></span>
+          <span class="radio"></span>
+        </button>
+        <button class="peer busy" data-busy>
+          <span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg></span>
+          <span class="t"><div class="n">小明的笔记本</div><div class="s">192.168.1.40</div></span>
+          <span class="tag">正在接收</span>
+        </button>
+      </div>
+
+      <div class="radar" id="radar" data-show="searching">
+        <div class="pulse"><i></i><i></i><i></i><div class="core"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg></div></div>
+        <h3>正在寻找附近的电脑</h3>
+        <p>在另一台电脑上打开 LAN3DShare，<br>它会自动出现在这里。</p>
+        <button class="tip-link" id="tip-toggle">一直找不到？</button>
+        <div class="tip" id="tip" hidden>两台电脑需要在同一个局域网。首次运行时请允许 LAN3DShare 访问专用网络；无线路由器的访客网络或客户端隔离也会挡住发现。</div>
+      </div>
+
+      <div class="target" data-show="sending">
+        <div class="head">
+          <span class="ic"><svg class="i lg" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg></span>
+          <span><div class="n" id="target-name">客厅电脑</div><div class="s" id="target-ip">192.168.1.25</div></span>
+        </div>
+        <div class="clock js-time">00:00:00</div>
+        <div class="state-line"><span class="dot live"></span>已连接，画面传输中</div>
+        <div class="note">对方已自动打开画面窗口，可以自由缩放，或全屏以 3D 观看。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 接收侧布局 -->
+  <div class="stage recv" data-show="receiving">
+    <div class="card">
+      <div class="preview" id="recv-preview"></div>
+    </div>
+    <div>
+      <div class="label">正在接收来自</div>
+      <div class="recv-name">客厅电脑</div>
+      <div class="state-line"><span class="dot live"></span>已连接 · <span class="mono js-time">00:12:08</span></div>
+      <p class="recv-desc">画面窗口已在 <b>屏幕 2</b> 打开，<br>可以随意移动和拉伸。</p>
+      <button class="primary" id="go-full">
+        <svg class="i" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        全屏显示 <kbd>F11</kbd>
+      </button>
+      <p class="hint">全屏时由本机 LeiaSR 交织为 3D</p>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="msg" data-show="idle picker settings quality"><span class="dot"></span><span>本机 <b>书房电脑</b> · 可被发现</span></div>
+    <div class="msg" data-show="searching"><span class="dot"></span><span>本机 <b>书房电脑</b> · 等待其他设备</span></div>
+    <div class="msg mono" id="send-stats" data-show="sending"></div>
+    <div class="msg mono" data-show="receiving">NVENC HEVC · 3840 × 2160 · 60 FPS · 200 Mbps</div>
+
+    <div class="actions" data-show="idle picker settings quality searching">
+      <button class="q-chip" id="q-chip" title="画质">
+        <span id="q-summary">4K · 60 FPS · 200 Mbps</span>
+        <svg class="i sm chev" viewBox="0 0 24 24"><path d="M7 14l5-5 5 5"/></svg>
+      </button>
+      <button class="primary" id="connect" data-show="idle picker settings quality">
+        连接并发送
+        <svg class="i sm" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+      <button class="primary" disabled data-show="searching">
+        连接并发送
+        <svg class="i sm" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+    <button class="secondary" id="disconnect" data-show="sending receiving">断开连接</button>
+  </div>
+
+  <div class="scrim" id="scrim" data-show="picker quality"></div>
+
+  <div class="qpop" data-show="quality">
+    <div class="q-head">
+      <b>画质</b>
+      <button id="q-reset">恢复默认</button>
+    </div>
+    <div class="q-sec">
+      <div class="q-row">分辨率<span>上限，保持比例，不放大原画面</span></div>
+      <div class="seg" data-key="res">
+        <button data-v="720p">720p</button>
+        <button data-v="1080p">1080p</button>
+        <button data-v="2k">2K</button>
+        <button data-v="4k">4K</button>
+      </div>
+    </div>
+    <div class="q-sec">
+      <div class="q-row">帧率<span>FPS</span></div>
+      <div class="seg" data-key="fps">
+        <button data-v="30">30</button>
+        <button data-v="60">60</button>
+        <button data-v="90">90</button>
+        <button data-v="120">120</button>
+      </div>
+    </div>
+    <div class="q-sec">
+      <div class="q-row">码率<span>Mbps</span></div>
+      <div class="seg" data-key="rate">
+        <button data-v="20">20</button>
+        <button data-v="50">50</button>
+        <button data-v="100">100</button>
+        <button data-v="200">200</button>
+        <button data-v="400">400</button>
+      </div>
+      <div class="q-hint">
+        <svg class="i sm" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0M5.8 12.6a9 9 0 0 1 12.4 0M9.2 16.1a4 4 0 0 1 5.6 0"/><circle cx="12" cy="19.4" r=".8"/></svg>
+        <span id="q-rate-hint"></span>
+      </div>
+    </div>
+    <div class="q-note">
+      <svg class="i sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.01"/></svg>
+      <span>两台电脑没有共同的硬件编解码时，自动降为 1080p · 30 FPS · 20 Mbps 的软件 H.264。</span>
+    </div>
+  </div>
+
+  <div class="modal-wrap" id="modal-wrap" data-show="settings">
+    <div class="modal">
+      <div class="m-head">
+        <h2>设置</h2>
+        <button class="js-close" title="关闭"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="m-body">
+        <div class="field">
+          <div class="f-label">本机名称<span>显示在其他电脑的设备列表里</span></div>
+          <input class="input" value="书房电脑">
+        </div>
+        <div class="field">
+          <div class="f-label">接收画面显示在</div>
+          <div class="mons">
+            <button class="mon"><span class="shape"><i style="width:34px;height:19px"></i></span><span><div class="n">屏幕 1</div><div class="s">2560 × 1440</div></span></button>
+            <button class="mon on"><span class="shape"><i style="width:42px;height:24px"></i></span><span><div class="n">屏幕 2</div><div class="s">3840 × 2160</div></span></button>
+          </div>
+        </div>
+        <div class="field">
+          <div class="f-label">3D 运行时目录</div>
+          <div class="path">
+            <input class="input" value="C:\Program Files\LeiaSR\Platform\bin">
+            <button class="ghost">选择…</button>
+          </div>
+          <div class="found"><span class="dot"></span>已找到 LeiaSR 运行时</div>
+          <div class="f-help">只在全屏显示 3D 画面时使用。<br>使用 TitanLeiaBridge 时，选择它的完整运行时目录。</div>
+        </div>
+      </div>
+      <div class="m-foot">
+        <button class="text-btn">
+          <svg class="i sm" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>
+          查看日志
+        </button>
+        <div class="btns">
+          <button class="btn plain js-close">取消</button>
+          <button class="btn solid js-close">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 画面窗口（接收端独立窗口） ================= -->
+<div class="viewer" data-show="viewer viewer-fallback">
+  <svg viewBox="0 0 160 90" preserveAspectRatio="xMidYMid meet"><use href="#sky"/><use href="#far"/><use href="#near"/></svg>
+  <div class="v-bar">
+    <span class="n">客厅电脑</span>
+    <span class="chip" data-show="viewer">3D</span>
+    <span class="chip" data-show="viewer-fallback">2D</span>
+    <span class="sp"></span>
+    <button class="v-btn" title="全屏"><svg class="i" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button class="v-btn" id="viewer-close" title="关闭并断开"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="v-hint" data-show="viewer">双击画面或按 F11 全屏 · Esc 还原</div>
+  <div class="v-toast" data-show="viewer-fallback">
+    <span class="w"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg></span>
+    本机未能加载 LeiaSR，3D 画面暂以 2D 显示，连接不受影响
+    <button>去设置</button>
+  </div>
+</div>
+
+<p class="caption" id="caption"></p>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+const captions = {
+  'idle': '默认界面只回答两个问题：分享什么、发给谁。设备自动出现，选中一台后点击「连接并发送」。',
+  'picker': '点击「更换」选择分享内容：屏幕会自动识别 3D，运行中的 3D 程序可以直接采集，也可以从这里启动程序或使用测试画面。',
+  'quality': '画质收在发送按钮旁，平时只显示当前选择。展开后分辨率、帧率、码率各自独立，码率下方给出网络建议。',
+  'searching': '还没有发现其他电脑时，右侧变成等待状态，排查提示默认折叠，需要时再展开。',
+  'sending': '发送中只保留正在连接的那台电脑，连线流动表示画面在传输；屏幕源识别到 LeiaSR 后预览变为左右并排。唯一的操作是断开。',
+  'receiving': '对方发起连接后自动打开画面窗口，主界面只提供「全屏显示」和「断开连接」。',
+  'settings': '设置只有三项：本机名称、默认接收屏幕、3D 运行时目录。日志入口也收在这里，不占主界面。',
+  'viewer': '接收端的画面窗口：无边框、保持比例，顶部操作条只在鼠标悬停时出现。双击或 F11 全屏，Esc 还原。',
+  'viewer-fallback': '本机无法加载 LeiaSR 时，画面以 2D 显示并给出一条提示，连接不中断。'
+};
+
+const sources = {
+  s1:     { name: '屏幕 1', sub: '2560 × 1440 · 自动识别 3D', kind: 'screen', w: 2560, h: 1440 },
+  s2:     { name: '屏幕 2', sub: '3840 × 2160 · 自动识别 3D', kind: 'screen', w: 3840, h: 2160 },
+  p1:     { name: 'Cyberpunk2077.exe', sub: '运行中的 3D 程序', kind: 'sbs', w: 3840, h: 2160 },
+  launch: { name: 'Hades II.exe', sub: '连接时启动并采集', kind: 'launch', w: 2560, h: 1440 },
+  test:   { name: '3D 测试画面', sub: '无需启动游戏', kind: 'test', w: 1280, h: 720 }
+};
+let source = 's1';
+
+const qualityDefault = { res: '4k', fps: '60', rate: '200' };
+const quality = { ...qualityDefault };
+const resolutions = { '720p': ['720p', 1280, 720], '1080p': ['1080p', 1920, 1080], '2k': ['2K', 2560, 1440], '4k': ['4K', 3840, 2160] };
+const rateHints = {
+  20: '省流量，普通 Wi-Fi 也能流畅',
+  50: '适合 Wi-Fi 5 / Wi-Fi 6',
+  100: '画质与带宽的平衡点，Wi-Fi 6 或有线网络',
+  200: '高画质，建议千兆有线网络',
+  400: '接近无损，需要稳定的千兆有线网络'
+};
+
+function renderQuality() {
+  const [label, maxW, maxH] = resolutions[quality.res];
+  $('#q-summary').textContent = `${label} · ${quality.fps} FPS · ${quality.rate} Mbps`;
+  $('#q-rate-hint').textContent = rateHints[quality.rate];
+  $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === quality[seg.dataset.key])));
+  const src = sources[source];
+  const scale = Math.min(1, maxW / src.w, maxH / src.h);
+  const even = n => Math.floor(n * scale / 2) * 2;
+  $('#send-stats').textContent = `NVENC HEVC · ${even(src.w)} × ${even(src.h)} · ${quality.fps} FPS · ${quality.rate} Mbps`;
+}
+let state = 'idle';
+let started = 0, ticker = null;
+
+const scene = (dx, fit) =>
+  `<svg viewBox="0 0 160 90" preserveAspectRatio="${fit}"><use href="#sky"/><use href="#far" x="${dx * .4}"/><use href="#near" x="${dx}"/></svg>`;
+const pattern = (dx, fit) =>
+  `<svg viewBox="0 0 160 90" preserveAspectRatio="${fit}"><use href="#grid"/><use href="#target" x="${dx}"/></svg>`;
+const ic3d = '<svg class="i sm" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>';
+
+function renderPreview() {
+  const src = sources[source];
+  const sending = state === 'sending';
+  const draw = src.kind === 'test' ? pattern : scene;
+  const sbs = src.kind === 'test' || src.kind === 'sbs' || sending;
+  let html = sbs
+    ? `<div class="half"><span class="eye">L</span>${draw(-2, 'none')}</div><div class="half"><span class="eye">R</span>${draw(2, 'none')}</div>`
+    : draw(0, 'xMidYMid slice');
+  let badge;
+  if (sending) badge = '<span class="dot live"></span>3D 左右并排';
+  else if (src.kind === 'screen') badge = ic3d + '有 3D 画面时自动切换';
+  else if (src.kind === 'launch') badge = ic3d + '连接后启动';
+  else badge = ic3d + '3D 左右并排';
+  $('#preview').innerHTML = html + `<span class="badge">${badge}</span>`;
+  $('#src-name').textContent = src.name;
+  $('#src-sub').textContent = src.sub;
+  $$('.opt').forEach(o => o.classList.toggle('on', o.dataset.src === source));
+}
+
+$('#recv-preview').innerHTML = scene(0, 'xMidYMid slice') + `<span class="badge">${ic3d}3D 画面 · 窗口内显示左眼</span>`;
+
+function renderTime() {
+  const t = Math.floor((Date.now() - started) / 1000);
+  const p = n => String(n).padStart(2, '0');
+  $$('.js-time').forEach(el => el.textContent = `${p(Math.floor(t / 3600))}:${p(Math.floor(t / 60) % 60)}:${p(t % 60)}`);
+}
+
+function setState(s) {
+  const wasLive = state === 'sending' || state === 'receiving';
+  state = s;
+  document.body.dataset.state = s;
+  $$('[data-show]').forEach(el => el.hidden = !el.dataset.show.split(' ').includes(s));
+  $$('#switch button').forEach(b => b.classList.toggle('on', b.dataset.s === s));
+  $('#caption').textContent = captions[s];
+
+  const link = $('#link');
+  link.classList.toggle('live', s === 'sending');
+  link.classList.toggle('ready', s !== 'sending' && s !== 'searching' && !!$('.peer.sel'));
+
+  const live = s === 'sending' || s === 'receiving';
+  if (live && !wasLive) {
+    started = Date.now() - (s === 'receiving' ? 728000 : 0);
+    renderTime();
+    ticker = setInterval(renderTime, 1000);
+  } else if (!live) {
+    clearInterval(ticker);
+    ticker = null;
+  }
+  $('#q-chip').classList.toggle('on', s === 'quality');
+  renderPreview();
+  renderQuality();
+  history.replaceState(null, '', '#' + s);
+}
+
+$$('#switch button').forEach(b => b.onclick = () => setState(b.dataset.s));
+
+$$('.peer').forEach(p => p.onclick = () => {
+  if (p.hasAttribute('data-busy')) return;
+  $$('.peer').forEach(x => x.classList.toggle('sel', x === p));
+  $('#target-name').textContent = p.dataset.name;
+  $('#target-ip').textContent = p.dataset.ip;
+  setState(state);
+});
+
+$('#open-picker').onclick = () => setState(state === 'picker' ? 'idle' : 'picker');
+$('#scrim').onclick = () => setState('idle');
+$$('.opt').forEach(o => o.onclick = () => { source = o.dataset.src; setState('idle'); });
+$('#q-chip').onclick = () => setState(state === 'quality' ? 'idle' : 'quality');
+$$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.onclick = () => { quality[seg.dataset.key] = b.dataset.v; renderQuality(); }));
+$('#q-reset').onclick = () => { Object.assign(quality, qualityDefault); renderQuality(); };
+$('#connect').onclick = () => setState('sending');
+$('#disconnect').onclick = () => setState('idle');
+$('#open-settings').onclick = () => setState('settings');
+$$('.js-close').forEach(b => b.onclick = () => setState('idle'));
+$('#modal-wrap').onclick = e => { if (e.target.id === 'modal-wrap') setState('idle'); };
+$$('.mon').forEach(m => m.onclick = () => $$('.mon').forEach(x => x.classList.toggle('on', x === m)));
+$('#tip-toggle').onclick = () => { $('#tip').hidden = !$('#tip').hidden; };
+$('#go-full').onclick = () => setState('viewer');
+$('#viewer-close').onclick = () => setState('idle');
+
+const initial = location.hash.slice(1);
+setState(captions[initial] ? initial : 'idle');
+</script>
+</body>
+</html>

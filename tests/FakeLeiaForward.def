@@ -1,0 +1,25 @@
+LIBRARY SimulatedRealityDirectX
+EXPORTS
+    ?CreateDX11Weaver@SR@@YA?AW4WeaverErrorCode@@PEAVSRContext@1@PEAUID3D11DeviceContext@@PEAUHWND__@@PEAPEAVIDX11Weaver1@1@@Z=FakeLeiaRuntime.?CreateDX11Weaver@SR@@YA?AW4WeaverErrorCode@@PEAVSRContext@1@PEAUID3D11DeviceContext@@PEAUHWND__@@PEAPEAVIDX11Weaver1@1@@Z
+    ?CreateDX12Weaver@SR@@YA?AW4WeaverErrorCode@@PEAVSRContext@1@PEAUID3D12Device@@PEAUHWND__@@PEAPEAVIDX12Weaver1@1@@Z=FakeLeiaRuntime.?CreateDX12Weaver@SR@@YA?AW4WeaverErrorCode@@PEAVSRContext@1@PEAUID3D12Device@@PEAUHWND__@@PEAPEAVIDX12Weaver1@1@@Z
+    ??0PredictingDX11Weaver@SR@@QEAA@AEAVSRContext@1@PEAUID3D11Device@@PEAUID3D11DeviceContext@@IIW4DXGI_FORMAT@@PEAUHWND__@@@Z=FakeLeiaRuntime.??0PredictingDX11Weaver@SR@@QEAA@AEAVSRContext@1@PEAUID3D11Device@@PEAUID3D11DeviceContext@@IIW4DXGI_FORMAT@@PEAUHWND__@@@Z
+    ??1PredictingDX11Weaver@SR@@QEAA@XZ=FakeLeiaRuntime.??1PredictingDX11Weaver@SR@@QEAA@XZ
+    ??1DX11WeaverBase@SR@@QEAA@XZ=FakeLeiaRuntime.??1DX11WeaverBase@SR@@QEAA@XZ
+    ?getFrameBuffer@DX11WeaverBase@SR@@QEAAPEAUID3D11RenderTargetView@@XZ=FakeLeiaRuntime.?getFrameBuffer@DX11WeaverBase@SR@@QEAAPEAUID3D11RenderTargetView@@XZ
+    ?setInputFrameBuffer@DX11WeaverBase@SR@@QEAAXPEAUID3D11ShaderResourceView@@@Z=FakeLeiaRuntime.?setInputFrameBuffer@DX11WeaverBase@SR@@QEAAXPEAUID3D11ShaderResourceView@@@Z
+    ?setContext@DX11WeaverBase@SR@@QEAAXPEAUID3D11DeviceContext@@@Z=FakeLeiaRuntime.?setContext@DX11WeaverBase@SR@@QEAAXPEAUID3D11DeviceContext@@@Z
+    ?setWindowHandle@DX11WeaverBase@SR@@QEAAXPEAUHWND__@@@Z=FakeLeiaRuntime.?setWindowHandle@DX11WeaverBase@SR@@QEAAXPEAUHWND__@@@Z
+    ?weave@DX11WeaverBase@SR@@QEAAXII@Z=FakeLeiaRuntime.?weave@DX11WeaverBase@SR@@QEAAXII@Z
+    ?weave@DX11WeaverBase@SR@@QEAAXIIII@Z=FakeLeiaRuntime.?weave@DX11WeaverBase@SR@@QEAAXIIII@Z
+    ??0PredictingDX12Weaver@SR@@QEAA@AEAVSRContext@1@PEAUID3D12Device@@PEAUID3D12CommandAllocator@@PEAUID3D12CommandQueue@@PEAUID3D12Resource@@4PEAUHWND__@@@Z=FakeLeiaRuntime.??0PredictingDX12Weaver@SR@@QEAA@AEAVSRContext@1@PEAUID3D12Device@@PEAUID3D12CommandAllocator@@PEAUID3D12CommandQueue@@PEAUID3D12Resource@@4PEAUHWND__@@@Z
+    ??1PredictingDX12Weaver@SR@@QEAA@XZ=FakeLeiaRuntime.??1PredictingDX12Weaver@SR@@QEAA@XZ
+    ??1DX12WeaverBase@SR@@QEAA@XZ=FakeLeiaRuntime.??1DX12WeaverBase@SR@@QEAA@XZ
+    ?getFrameBuffer@DX12WeaverBase@SR@@QEAAPEAUID3D12Resource@@XZ=FakeLeiaRuntime.?getFrameBuffer@DX12WeaverBase@SR@@QEAAPEAUID3D12Resource@@XZ
+    ?setInputFrameBuffer@DX12WeaverBase@SR@@QEAAXPEAUID3D12Resource@@@Z=FakeLeiaRuntime.?setInputFrameBuffer@DX12WeaverBase@SR@@QEAAXPEAUID3D12Resource@@@Z
+    ?setInputFrameBuffer@DX12WeaverBase@SR@@QEAAXPEAUID3D12Resource@@W4DXGI_FORMAT@@@Z=FakeLeiaRuntime.?setInputFrameBuffer@DX12WeaverBase@SR@@QEAAXPEAUID3D12Resource@@W4DXGI_FORMAT@@@Z
+    ?setCommandList@DX12WeaverBase@SR@@QEAAXPEAUID3D12GraphicsCommandList@@@Z=FakeLeiaRuntime.?setCommandList@DX12WeaverBase@SR@@QEAAXPEAUID3D12GraphicsCommandList@@@Z
+    ?setWindowHandle@DX12WeaverBase@SR@@QEAAXPEAUHWND__@@@Z=FakeLeiaRuntime.?setWindowHandle@DX12WeaverBase@SR@@QEAAXPEAUHWND__@@@Z
+    ?weave@DX12WeaverBase@SR@@QEAAXII@Z=FakeLeiaRuntime.?weave@DX12WeaverBase@SR@@QEAAXII@Z
+    ?weave@DX12WeaverBase@SR@@QEAAXIIII@Z=FakeLeiaRuntime.?weave@DX12WeaverBase@SR@@QEAAXIIII@Z
+    ?weave@DX12WeaverBase@SR@@QEAAXPEAUID3D12GraphicsCommandList@@II@Z=FakeLeiaRuntime.?weave@DX12WeaverBase@SR@@QEAAXPEAUID3D12GraphicsCommandList@@II@Z
+    ?weave@DX12WeaverBase@SR@@QEAAXPEAUID3D12GraphicsCommandList@@IIII@Z=FakeLeiaRuntime.?weave@DX12WeaverBase@SR@@QEAAXPEAUID3D12GraphicsCommandList@@IIII@Z

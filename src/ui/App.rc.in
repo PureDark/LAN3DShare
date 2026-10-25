@@ -1,0 +1,5 @@
+#pragma code_page(65001)
+#include <windows.h>
+
+101 ICON "@LAN3D_ICON_FILE@"
+201 RCDATA "@LAN3D_HTML_FILE@"
