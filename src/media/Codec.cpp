@@ -160,7 +160,7 @@ uint32_t HardwareEncodeCapabilities() { return NvEncoder::Probe(); }
 uint32_t HardwareDecodeCapabilities() { return NvDecoder::Probe(); }
 bool ValidPacket(const EncodedFrame& f) {
     return ValidConfig(f.config) && !f.data.empty() && f.data.size() <= MaxEncodedBytes &&
-        (f.kind == ContentKind::Desktop || f.kind == ContentKind::LeiaSbs) &&
+        (f.kind == ContentKind::Desktop || IsLeia(f.kind)) &&
         ValidDisplaySize(f.displayWidth, f.displayHeight);
 }
 struct Encoder::Impl {

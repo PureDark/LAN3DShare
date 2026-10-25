@@ -72,6 +72,7 @@ void Usage() {
         "LAN3DReceiver --list-monitors\n"
         "LAN3DReceiver --preview --self-test [--frames 90]\n"
         "Fullscreen button/double-click/F11: toggle fullscreen. Esc: restore fullscreen or exit window.\n"
+        "F12: toggle 3D / left-eye 2D without reconnecting.\n"
         "--auto-display: windowed 2D; fullscreen Leia SBS only uses the local runtime.\n"
         "--preview is ordinary 2D SBS and never loads or initializes LeiaSR.\n";
 }
@@ -175,6 +176,7 @@ int SelectMonitor(const std::vector<Monitor>& monitors, int requested) {
 }
 struct WindowState {
     bool fullscreen{}, designed{}, fallback{}, dirty{true}, paintReady{};
+    bool stereoEnabled{true};
     HWND overlay{}, parent{};
     DWORD parentPid{};
     unsigned volumePercent{100};
@@ -287,6 +289,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             return 0;
         }
         if (wparam == VK_F11 && state && !(lparam & (1LL << 30))) { ToggleFullscreen(window, *state); return 0; }
+        if (wparam == VK_F12 && state) {
+            if (!(lparam & (1LL << 30))) { state->stereoEnabled = !state->stereoEnabled; state->dirty = true; }
+            return 0;
+        }
         break;
     case WM_COMMAND:
         if (LOWORD(wparam) == 1001 && HIWORD(wparam) == BN_CLICKED && state) { ToggleFullscreen(window, *state); return 0; }
@@ -338,6 +344,7 @@ void ViewerAction(HWND window, WindowState& state, const std::string& message) {
             SetVolume(window, state, value["percent"].get<unsigned>(), true);
     }
     else if (action == "fullscreen") ToggleFullscreen(window, state);
+    else if (action == "toggleStereo") { state.stereoEnabled = !state.stereoEnabled; state.dirty = true; }
     else if (action == "escape") { if (state.fullscreen) ToggleFullscreen(window, state); }
     else if (action == "close") PostMessageW(window, WM_CLOSE, 0, 0);
     else if (action == "settings") {
@@ -362,6 +369,7 @@ void ViewerAction(HWND window, WindowState& state, const std::string& message) {
 class NetworkReceiver {
 public:
     std::atomic<bool> stop{};
+    std::atomic<bool> stereoRequested{true};
     std::mutex mutex;
     std::shared_ptr<const Frame> latest;
     std::string status{"Connecting"}, error;
@@ -459,8 +467,16 @@ public:
                             throw std::runtime_error("Decoder capability negotiation failed: " + detail);
                         { std::lock_guard lock(mutex); status = attempts ? "Recovering; waiting for a new keyframe" : "Connected; waiting for SBS"; }
                         bool firstPacket = true, resumed = attempts == 0;
+                        int sentStereo = -1;
                         uint64_t keySequence{};
                         while (!stop) {
+                            const int requestedStereo = stereoRequested.load() ? 1 : 0;
+                            if (sentStereo != requestedStereo) {
+                                if (connection->SendStereoMode(requestedStereo != 0, timeout(250), detail) != net::IoResult::Ok)
+                                    throw std::runtime_error("Cannot send receiver display mode: " + detail);
+                                sentStereo = requestedStereo;
+                                std::cout << "RECEIVER_MODE requested_stereo=" << requestedStereo << '\n' << std::flush;
+                            }
                             media::EncodedFrame packet;
                             const auto receiveStart = Clock::now();
                             const auto result = connection->Receive(packet, timeout(250), detail);
@@ -713,7 +729,7 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
             while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
                 if (message.message == WM_QUIT) { quit = true; break; }
                 if (message.message == WM_KEYDOWN && message.hwnd != window && IsChild(window, message.hwnd) &&
-                    (message.wParam == VK_F11 || message.wParam == VK_ESCAPE ||
+                    (message.wParam == VK_F11 || message.wParam == VK_F12 || message.wParam == VK_ESCAPE ||
                         ((GetKeyState(VK_CONTROL) & 0x8000) && (message.wParam == VK_UP || message.wParam == VK_DOWN)))) {
                     SendMessageW(window, message.message, message.wParam, message.lParam);
                     continue;
@@ -727,6 +743,8 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
             if (uiSmoke && Clock::now() - uiStarted > std::chrono::seconds(25))
                 throw std::runtime_error("Receiver UI smoke test timed out");
             const bool minimized = IsIconic(window) != FALSE;
+            renderer.SetStereoEnabled(state.stereoEnabled);
+            network.stereoRequested.store(state.stereoEnabled);
             std::string status;
             uint64_t decoded{};
             bool ended{}, recovering{};
@@ -765,7 +783,7 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
                 // Remove all Chromium pixels before the first interwoven
                 // frame. Fullscreen weaving always owns the physical client
                 // pixels; neither a CSS transform nor an overlay rescales it.
-                const bool mayWeave = state.fullscreen && !options.preview && renderer.HasFrame() && renderer.Content() == ContentKind::LeiaSbs;
+                const bool mayWeave = state.stereoEnabled && state.fullscreen && !options.preview && renderer.HasFrame() && renderer.Content() == ContentKind::LeiaSbs;
                 if (designed && mayWeave && overlayVisible) {
                     ShowWindow(state.overlay, SW_HIDE); web.Resize(); overlayVisible = false; SetFocus(window);
                 }
@@ -785,8 +803,9 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
             }
             if (designed && web.Ready()) {
                 nlohmann::json model{{"type", "viewer"}, {"mode", "viewer"}, {"peerName", displayName},
-                    {"kind", renderer.Content() == ContentKind::LeiaSbs ? "sbs" : "desktop"},
+                    {"kind", IsLeia(renderer.Content()) ? "sbs" : "desktop"}, {"leftEyeOnly", renderer.Content() == ContentKind::LeiaLeft},
                     {"hasFrame", renderer.HasFrame()}, {"fullscreen", state.fullscreen}, {"fallback", state.fallback},
+                    {"stereoEnabled", state.stereoEnabled}, {"weaving", renderer.IsWeaving()},
                     {"recovering", recovering},
                     {"volumePercent", state.volumePercent}, {"audio", audioModel},
                     {"receivingFps", receiveFps}, {"width", displayed ? displayed->width : 0}, {"height", displayed ? displayed->height : 0}};
@@ -839,6 +858,14 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
                     smokePhase = 11;
                     web.Execute(L"document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',ctrlKey:true,bubbles:true}));");
                 } else if (smokePhase == 11 && state.volumePercent == 525) {
+                    smokePhase = 12;
+                    web.Execute(L"document.dispatchEvent(new KeyboardEvent('keydown',{key:'F12',bubbles:true})); document.dispatchEvent(new KeyboardEvent('keydown',{key:'F12',repeat:true,bubbles:true}));");
+                } else if (smokePhase == 12 && !state.stereoEnabled) {
+                    if (!state.fullscreen || renderer.IsWeaving() || !renderer.Draw(true))
+                        throw std::runtime_error("F12 did not retain fullscreen left-eye 2D");
+                    SendMessageW(window, WM_KEYDOWN, VK_F12, 0);
+                    SendMessageW(window, WM_KEYDOWN, VK_F12, 1LL << 30);
+                    if (!state.stereoEnabled) throw std::runtime_error("Native F12 repeat toggled the mode twice");
                     smokePhase = 3; web.Execute(L"chrome.webview.postMessage({action:'escape'})");
                 } else if (smokePhase == 3 && !state.fullscreen) {
                     state.fallback = true; state.dirty = true; smokeChanged = now; smokePhase = 4;
@@ -869,18 +896,18 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
                 if (options.autoDisplay) {
                     const std::string mode = !renderer.HasFrame() ? "等待画面" :
                         renderer.IsWeaving() ? (ready ? "LeiaSR 3D" : "3D 画面 · 准备中") :
-                        renderer.Content() == ContentKind::LeiaSbs ? "3D 画面 · 窗口预览" : "普通画面";
+                        IsLeia(renderer.Content()) ? (state.stereoEnabled ? (renderer.Content() == ContentKind::LeiaLeft ? "等待 3D 画面" : "3D 画面 · 窗口预览") : "2D · 左眼画面") : "普通画面";
                     const auto caption = displayName + " | " + mode + " | 接收 " + std::to_string(int(receivedFps + .5)) + " 帧/秒";
                     SetWindowTextW(window, Wide(caption).c_str());
                 } else SetWindowTextW(window, Wide(title).c_str());
                 std::cout << title << "\n";
                 if (!options.selfTest) std::cout << "AUDIO_STATE " << network.AudioStatus() << '\n';
                 if (options.autoDisplay) {
-                    const nlohmann::json stats{{"kind", renderer.Content() == ContentKind::LeiaSbs ? "sbs" : "desktop"},
+                    const nlohmann::json stats{{"kind", IsLeia(renderer.Content()) ? "sbs" : "desktop"}, {"leftEyeOnly", renderer.Content() == ContentKind::LeiaLeft},
                         {"hasFrame", renderer.HasFrame()}, {"receivingFps", receiveFps},
                         {"recovering", recovering},
                         {"width", displayed ? displayed->width : 0}, {"height", displayed ? displayed->height : 0},
-                        {"fullscreen", state.fullscreen}, {"weaving", renderer.IsWeaving()}};
+                        {"fullscreen", state.fullscreen}, {"weaving", renderer.IsWeaving()}, {"stereoEnabled", state.stereoEnabled}};
                     std::cout << "VIEWER_STATE " << stats.dump() << '\n' << std::flush;
                 }
                 lastStats = now; fpsFrames = 0; statsDecoded = decoded;

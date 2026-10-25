@@ -22,6 +22,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -148,6 +149,16 @@ lan3d::Frame Pattern(uint32_t width, uint32_t height, uint64_t sequence) {
         if (mark || foot || right || bit) p[0] = p[1] = p[2] = 250;
     }
     return f;
+}
+// Diagnostic/software input only. Production shared textures are cropped by
+// the D3D11 video processor before scaling/conversion/NVENC.
+void SelectLeftEye(lan3d::Frame& frame) {
+    if (frame.kind != lan3d::ContentKind::LeiaSbs) return;
+    const auto width = frame.width / 2, stride = width * 4;
+    for (uint32_t y = 0; y < frame.height; ++y)
+        std::memmove(frame.bgra.data() + size_t(y) * stride, frame.bgra.data() + size_t(y) * frame.stride, stride);
+    frame.width = width; frame.stride = stride; frame.bgra.resize(size_t(stride) * frame.height);
+    frame.kind = lan3d::ContentKind::LeiaLeft;
 }
 lan3d::Frame Scale(lan3d::Frame source, uint32_t maxWidth, uint32_t maxHeight) {
     const double ratio = std::min({1.0, double(maxWidth) / source.width, double(maxHeight) / source.height});
@@ -649,7 +660,7 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
         uint64_t audioFramesSent{}, audioPacketsSent{}, testAudioEnd{};
         bool streamReady{};
         uint32_t encodedWidth{}, encodedHeight{};
-        bool encodedGpu{};
+        bool encodedGpu{}, encodedLeft{}, receiverStereo{true};
         uint32_t encodedSourceWidth{}, encodedSourceHeight{};
         LUID encodedAdapter{};
         lastGpuTimestamp = 0;
@@ -667,6 +678,16 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
         SenderProfile profile(o.profile);
         FramePacer pacer;
         while (!stopping() && !expired() && connection.IsOpen() && (!o.frames || sent < o.frames)) {
+            bool requestedStereo = receiverStereo;
+            const auto modeStatus = connection.PollStereoMode(requestedStereo, error);
+            if (modeStatus == lan3d::net::IoResult::Closed || modeStatus == lan3d::net::IoResult::Error) {
+                if (!error.empty()) std::cout << "RECEIVER_MODE error=" << error << '\n';
+                break;
+            }
+            if (requestedStereo != receiverStereo) {
+                receiverStereo = requestedStereo; latestFrame = {}; encodedWidth = 0;
+                std::cout << "RECEIVER_MODE stereo=" << receiverStereo << " action=reconfigure-keyframe bitrate=" << streamBitrate << '\n' << std::flush;
+            }
             const auto now = std::chrono::steady_clock::now();
             if (now < nextFrame) { pacer.Wait(std::min(nextFrame - now, std::chrono::steady_clock::duration(std::chrono::milliseconds(5)))); continue; }
             nextFrame += period;
@@ -745,10 +766,11 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
                         stereoSelected = true; cachedDesktop = {}; desktopFreshAfter = time;
                         profile.sourceWidth = gpuFrame.width; profile.sourceHeight = gpuFrame.height;
                         latestFrame = {};
-                        // Requested dimensions describe the complete packed SBS.
-                        latestFrame.width = std::min(gpuFrame.width, streamWidth) & ~3u;
+                        // Crop before applying the limit: a mono receiver gets
+                        // the original left eye, never half of an already downscaled SBS.
+                        latestFrame.width = std::min(receiverStereo ? gpuFrame.width : gpuFrame.width / 2, streamWidth) & ~3u;
                         latestFrame.height = std::min(gpuFrame.height, streamHeight) & ~1u;
-                        latestFrame.kind = gpuFrame.kind;
+                        latestFrame.kind = receiverStereo ? gpuFrame.kind : lan3d::ContentKind::LeiaLeft;
                         latestFrame.sequence = gpuFrame.sequence;
                         latestFrame.timestamp100ns = gpuFrame.timestamp100ns;
                         displayWidth = gpuFrame.width / 2; displayHeight = gpuFrame.height;
@@ -798,7 +820,7 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
                     if (!stereoSelected) {
                         cachedDesktop = {}; desktopFreshAfter = time;
                     }
-                    if (freshSbs || latestFrame.bgra.empty() || latestFrame.kind != lan3d::ContentKind::LeiaSbs) source = cachedSbs;
+                    if (freshSbs || latestFrame.bgra.empty() || !lan3d::IsLeia(latestFrame.kind)) source = cachedSbs;
                 } else {
                     if (stereoSelected) desktop.RequestRefresh();
                     const bool desktopGpu = commonHardware && !o.captureCpu;
@@ -839,7 +861,7 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
                 else if (!source.bgra.empty()) source.sequence = ++outputSequence;
                 // Do not keep sending the previous content kind while waiting
                 // for the first current desktop/SBS frame after a transition.
-                else if (!latestFrame.bgra.empty() && latestFrame.kind != (stereo ? lan3d::ContentKind::LeiaSbs : lan3d::ContentKind::Desktop)) continue;
+                else if (!latestFrame.bgra.empty() && lan3d::IsLeia(latestFrame.kind) != stereo) continue;
                 else if (latestFrame.bgra.empty() || now - lastFrameSent < std::chrono::seconds(1)) continue;
             } else if (!readLatest(source)) {
                 if (now - lastStatus > std::chrono::seconds(2)) {
@@ -857,16 +879,18 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
                     lastSequence = source.sequence;
                     if (!o.launch.empty()) source.sequence = ++outputSequence;
                 }
-                if (latestFrame.bgra.empty() || latestFrame.kind != source.kind)
+                if (latestFrame.bgra.empty() || lan3d::IsLeia(latestFrame.kind) != lan3d::IsLeia(source.kind))
                     std::cout << "SOURCE_KIND " << (source.kind == lan3d::ContentKind::LeiaSbs ? "LeiaSbs" : "Desktop") << '\n' << std::flush;
                 profile.sourceWidth = source.width; profile.sourceHeight = source.height;
                 displayWidth = source.kind == lan3d::ContentKind::LeiaSbs ? source.width / 2 : source.width;
                 displayHeight = source.height;
                 SenderProfile::Scope scaleTiming(profile, SenderProfile::ScaleFrame);
+                if (!receiverStereo) SelectLeftEye(source);
                 latestFrame = Scale(std::move(source), streamWidth, streamHeight);
             }
             const auto& frame = latestFrame;
-            if (frame.width != encodedWidth || frame.height != encodedHeight || encodedGpu != gpuReady ||
+            const bool leftOnly = frame.kind == lan3d::ContentKind::LeiaLeft;
+            if (frame.width != encodedWidth || frame.height != encodedHeight || encodedGpu != gpuReady || encodedLeft != leftOnly ||
                 (gpuReady && (gpuFrame.width != encodedSourceWidth || gpuFrame.height != encodedSourceHeight ||
                     gpuFrame.adapterLuid.LowPart != encodedAdapter.LowPart || gpuFrame.adapterLuid.HighPart != encodedAdapter.HighPart))) {
                 SenderProfile::Scope configureTiming(profile, SenderProfile::Configure);
@@ -875,6 +899,7 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
                 for (const auto codec : {CodecId::Av1, CodecId::Hevc, CodecId::H264}) {
                     if (!(commonHardware & lan3d::media::CodecBit(codec))) continue;
                     lan3d::media::CodecConfig config{frame.width, frame.height, streamFps, streamBitrate, {}, codec};
+                    config.leftEyeOnly = gpuReady && leftOnly;
                     if (gpuReady ? encoder.ConfigureGpu(config, gpuFrame, error, explicitGpu ? &selectedGpu : nullptr) : encoder.Configure(config, true, error)) { configured = true; break; }
                     failures += std::string(lan3d::media::CodecName(codec)) + ": " + error + "; ";
                 }
@@ -895,11 +920,11 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
                 }
                 if (!commonHardware) configured = encoder.Configure(frame.width, frame.height, streamFps, streamBitrate, error);
                 if (!configured) throw std::runtime_error(failures.empty() ? error : failures);
-                encodedWidth = frame.width; encodedHeight = frame.height; encodedGpu = gpuReady;
+                encodedWidth = frame.width; encodedHeight = frame.height; encodedGpu = gpuReady; encodedLeft = leftOnly;
                 if (gpuReady) { encodedSourceWidth = gpuFrame.width; encodedSourceHeight = gpuFrame.height; encodedAdapter = gpuFrame.adapterLuid; }
                 if (!encoder.RequestKeyFrame(error)) throw std::runtime_error(error);
                 std::cout << "ENCODER " << (encoder.hardware() ? "NVENC " : "Software ") << lan3d::media::CodecName(encoder.config().codec) << ' '
-                    << (frame.kind == lan3d::ContentKind::LeiaSbs ? "SBS " : "Desktop ") << frame.width << 'x' << frame.height
+                    << (frame.kind == lan3d::ContentKind::LeiaSbs ? "SBS " : leftOnly ? "LeftEye " : "Desktop ") << frame.width << 'x' << frame.height
                     << " target=" << streamFps << "fps/" << streamBitrate / 1000000 << "Mbps";
                 if (gpuReady) std::cout << " gpu_shared=1";
                 if (frame.kind == lan3d::ContentKind::LeiaSbs) std::cout << " (each eye " << frame.width / 2 << 'x' << frame.height << ')';

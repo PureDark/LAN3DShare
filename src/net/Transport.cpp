@@ -13,7 +13,8 @@ namespace lan3d::net {
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr uint32_t WireMagic = 0x4c334453; // L3DS
-constexpr uint32_t WireVersion = 5;
+constexpr uint32_t WireVersion = 6;
+constexpr uint32_t ModeMagic = 0x4c33444d; // L3DM
 constexpr uint32_t CapsMagic = 0x4c334443; // L3DC
 constexpr size_t HeaderSize = 80;
 constexpr uint32_t HelloMagic = 0x4c334448; // L3DH
@@ -155,7 +156,12 @@ bool ValidSessionToken(const std::string& token) {
     std::array<uint8_t, 20> hello{};
     return TokenBytes(token, hello);
 }
-struct TcpConnection::Impl : SocketState { bool sentAny{}, receivedAny{}, authenticated{}, capabilities{}; };
+struct TcpConnection::Impl : SocketState {
+    bool sentAny{}, receivedAny{}, authenticated{}, capabilities{};
+    std::array<uint8_t, 8> modeBytes{};
+    size_t modeRead{};
+    Clock::time_point modeStarted{};
+};
 TcpConnection::TcpConnection() : impl_(std::make_unique<Impl>()) {}
 TcpConnection::~TcpConnection() = default;
 TcpConnection::TcpConnection(TcpConnection&&) noexcept = default;
@@ -180,7 +186,7 @@ bool TcpConnection::PollPeerClosed() {
 IoResult TcpConnection::Connect(const std::string& ipv4, uint16_t port, uint32_t timeoutMs, std::string& error) {
     error.clear();
     if (!impl_) impl_ = std::make_unique<Impl>();
-    impl_->Close(); impl_->sentAny = false; impl_->receivedAny = false; impl_->authenticated = false; impl_->capabilities = false;
+    impl_->Close(); impl_->sentAny = false; impl_->receivedAny = false; impl_->authenticated = false; impl_->capabilities = false; impl_->modeRead = 0;
     if (!Ready(error)) return IoResult::Error;
     sockaddr_in address{};
     if (!port || !Address(ipv4, port, address, error)) { if (error.empty()) error = "TCP port must not be zero"; return IoResult::Error; }
@@ -278,6 +284,53 @@ IoResult TcpConnection::ReceiveCapabilities(uint32_t& hardwareDecoders, uint32_t
     else { hardwareDecoders = Get32(header.data() + 8); impl_->capabilities = true; }
     return result;
 }
+IoResult TcpConnection::SendStereoMode(bool enabled, uint32_t timeoutMs, std::string& error) {
+    error.clear();
+    if (!IsOpen()) return IoResult::Closed;
+    if (!impl_->capabilities) { error = "Mode control requires capability negotiation"; return IoResult::Error; }
+    std::array<uint8_t, 8> message{};
+    Put32(message.data(), ModeMagic); Put32(message.data() + 4, enabled ? 1u : 0u);
+    size_t total{};
+    const auto result = impl_->Transfer(true, message.data(), message.size(), Deadline(timeoutMs), total, error);
+    if (result != IoResult::Ok) impl_->Close();
+    return result;
+}
+IoResult TcpConnection::PollStereoMode(bool& enabled, std::string& error) {
+    error.clear();
+    if (!IsOpen()) return IoResult::Closed;
+    if (!impl_->capabilities) { error = "Mode control requires capability negotiation"; return IoResult::Error; }
+    bool received{};
+    for (unsigned i = 0; i < 32; ++i) {
+        if (impl_->modeRead && Clock::now() - impl_->modeStarted > std::chrono::seconds(2)) {
+            error = "Incomplete receiver mode message timed out"; impl_->Close(); return IoResult::Error;
+        }
+        int count{}, code{};
+        {
+            std::lock_guard lock(impl_->ioMutex);
+            const auto socket = impl_->socket.load();
+            if (socket == INVALID_SOCKET || impl_->stopped.load()) return IoResult::Closed;
+            count = recv(socket, reinterpret_cast<char*>(impl_->modeBytes.data() + impl_->modeRead),
+                int(impl_->modeBytes.size() - impl_->modeRead), 0);
+            if (count == SOCKET_ERROR) code = WSAGetLastError();
+        }
+        if (count == SOCKET_ERROR && code == WSAEWOULDBLOCK) return received ? IoResult::Ok : IoResult::Timeout;
+        if (count <= 0) {
+            impl_->Close();
+            if (count == SOCKET_ERROR) return SocketError(error, "receiver mode", code);
+            if (impl_->modeRead) { error = "Truncated receiver mode message"; return IoResult::Error; }
+            return IoResult::Closed;
+        }
+        if (!impl_->modeRead) impl_->modeStarted = Clock::now();
+        impl_->modeRead += count;
+        if (impl_->modeRead != impl_->modeBytes.size()) continue;
+        if (Get32(impl_->modeBytes.data()) != ModeMagic || Get32(impl_->modeBytes.data() + 4) > 1) {
+            error = "Invalid receiver mode message"; impl_->Close(); return IoResult::Error;
+        }
+        enabled = Get32(impl_->modeBytes.data() + 4) != 0;
+        impl_->modeRead = 0; received = true;
+    }
+    return received ? IoResult::Ok : IoResult::Timeout;
+}
 IoResult TcpConnection::Send(const media::EncodedFrame& packet, uint32_t timeoutMs, std::string& error) {
     error.clear();
     if (!IsOpen()) return IoResult::Closed;
@@ -289,7 +342,7 @@ IoResult TcpConnection::Send(const media::EncodedFrame& packet, uint32_t timeout
     }
     std::array<uint8_t, HeaderSize> header{};
     Put32(header.data(), WireMagic); Put32(header.data() + 4, WireVersion); Put32(header.data() + 8, HeaderSize);
-    Put32(header.data() + 12, (packet.keyframe ? 1u : 0u) | (packet.kind == ContentKind::LeiaSbs ? 2u : 0u));
+    Put32(header.data() + 12, (packet.keyframe ? 1u : 0u) | (packet.kind == ContentKind::LeiaSbs ? 2u : packet.kind == ContentKind::LeiaLeft ? 4u : 0u));
     Put32(header.data() + 16, packet.config.width); Put32(header.data() + 20, packet.config.height);
     Put32(header.data() + 24, packet.config.fps); Put32(header.data() + 28, packet.config.bitrate);
     Put64(header.data() + 32, packet.sequence); Put64(header.data() + 40, packet.timestamp100ns);
@@ -332,7 +385,7 @@ IoResult TcpConnection::Receive(media::EncodedFrame& packet, uint32_t timeoutMs,
     if (result == IoResult::Ok) {
         const auto* h = header.data();
         packet.keyframe = (Get32(h + 12) & 1) != 0;
-        packet.kind = (Get32(h + 12) & 2) ? ContentKind::LeiaSbs : ContentKind::Desktop;
+        packet.kind = (Get32(h + 12) & 4) ? ContentKind::LeiaLeft : (Get32(h + 12) & 2) ? ContentKind::LeiaSbs : ContentKind::Desktop;
         packet.config.width = Get32(h + 16); packet.config.height = Get32(h + 20);
         packet.config.fps = Get32(h + 24); packet.config.bitrate = Get32(h + 28);
         packet.config.codec = static_cast<media::CodecId>(Get32(h + 56));
@@ -342,7 +395,7 @@ IoResult TcpConnection::Receive(media::EncodedFrame& packet, uint32_t timeoutMs,
         const uint32_t audioFrames = Get32(h + 72), audioFlags = Get32(h + 76);
         packet.audio.timestamp100ns = Get64(h + 64); packet.audio.discontinuity = (audioFlags & 1) != 0;
         if (Get32(h) != WireMagic || Get32(h + 4) != WireVersion || Get32(h + 8) != HeaderSize ||
-            (Get32(h + 12) & ~3u) || !ValidDisplaySize(packet.displayWidth, packet.displayHeight) ||
+            (Get32(h + 12) & ~7u) || ((Get32(h + 12) & 6u) == 6u) || !ValidDisplaySize(packet.displayWidth, packet.displayHeight) ||
             !media::ValidConfig(packet.config) || extra > media::MaxSequenceHeaderBytes || !size || size > media::MaxEncodedBytes ||
             !ValidAudioHeader(packet.audio.timestamp100ns, audioFrames, audioFlags, packet.timestamp100ns) ||
             (!impl_->receivedAny && !packet.keyframe)) {
@@ -416,7 +469,7 @@ IoResult TcpServer::Accept(TcpConnection& connection, uint32_t timeoutMs, std::s
         if (!SetSocket(accepted, error)) { closesocket(accepted); return IoResult::Error; }
         connection.Close();
         if (!connection.impl_) connection.impl_ = std::make_unique<TcpConnection::Impl>();
-        connection.impl_->Assign(accepted); connection.impl_->sentAny = false; connection.impl_->receivedAny = false; connection.impl_->authenticated = false; connection.impl_->capabilities = false;
+        connection.impl_->Assign(accepted); connection.impl_->sentAny = false; connection.impl_->receivedAny = false; connection.impl_->authenticated = false; connection.impl_->capabilities = false; connection.impl_->modeRead = 0;
         return IoResult::Ok;
     }
 }

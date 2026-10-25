@@ -367,14 +367,14 @@ struct App {
                     state == L"foreground-desktop" ? L"当前前台是普通画面；固定分享 3D 程序可在画面来源中选择该程序。" : L"";
             }
         }
-        static const std::wregex encoderPattern(LR"((?:^|[\r\n])ENCODER (NVENC|Software) (AV1|HEVC|H\.264) (SBS|Desktop) ([0-9]+)x([0-9]+) target=([0-9]+)fps/([0-9]+)Mbps)");
+        static const std::wregex sourcePattern(LR"((?:^|[\r\n])SOURCE_KIND (LeiaSbs|Desktop))");
+        for (auto i = std::wsregex_iterator(log.begin(), log.end(), sourcePattern); i != std::wsregex_iterator(); ++i) contentKind = (*i)[1].str() == L"LeiaSbs" ? "sbs" : "desktop";
+        static const std::wregex encoderPattern(LR"((?:^|[\r\n])ENCODER (NVENC|Software) (AV1|HEVC|H\.264) (SBS|LeftEye|Desktop) ([0-9]+)x([0-9]+) target=([0-9]+)fps/([0-9]+)Mbps)");
         for (auto i = std::wsregex_iterator(log.begin(), log.end(), encoderPattern); i != std::wsregex_iterator(); ++i) {
             const auto& s = *i;
             encodingSummary = (s[1].str() == L"NVENC" ? L"NVENC " : L"软件回退 · ") + s[2].str() + L" · " + s[4].str() + L"×" + s[5].str() + L" · 目标 " + s[6].str() + L" FPS / " + s[7].str() + L" Mbps";
-            contentKind = s[3].str() == L"SBS" ? "sbs" : "desktop";
+            contentKind = s[3].str() == L"SBS" ? "sbs" : s[3].str() == L"LeftEye" ? "left" : "desktop";
         }
-        static const std::wregex sourcePattern(LR"((?:^|[\r\n])SOURCE_KIND (LeiaSbs|Desktop))");
-        for (auto i = std::wsregex_iterator(log.begin(), log.end(), sourcePattern); i != std::wsregex_iterator(); ++i) contentKind = (*i)[1].str() == L"LeiaSbs" ? "sbs" : "desktop";
         if (settings.rate == 0 && phase == Phase::Sending) {
             static const std::wregex ratePattern(LR"((?:^|[\r\n])AUTO_BITRATE target=([0-9]+))");
             for (auto i = std::wsregex_iterator(log.begin(), log.end(), ratePattern); i != std::wsregex_iterator(); ++i) {
@@ -385,7 +385,7 @@ struct App {
         static const std::wregex receiverPattern(LR"((?:^|[\r\n])VIEWER_STATE (\{[^\r\n]+\}))");
         for (auto i = std::wsregex_iterator(log.begin(), log.end(), receiverPattern); i != std::wsregex_iterator(); ++i) {
             const auto state = Json::parse(Utf8((*i)[1].str()), nullptr, false); if (state.is_discarded()) continue;
-            contentKind = state.value("kind", std::string("desktop"));
+            contentKind = state.value("leftEyeOnly", false) ? "left" : state.value("kind", std::string("desktop"));
             encodingSummary = std::to_wstring(state.value("width", 0)) + L"×" + std::to_wstring(state.value("height", 0)) + L" · " + std::to_wstring(state.value("receivingFps", 0)) + L" FPS";
             videoRecovering = state.value("recovering", false);
         }
@@ -486,7 +486,7 @@ struct App {
             if (phase == Phase::Sending || phase == Phase::Receiving) {
                 PreviewImage thumbnail;
                 if (ReadPreview(worker.ProcessId(), thumbnail)) {
-                    contentKind = thumbnail.frame.kind == ContentKind::LeiaSbs ? "sbs" : "desktop";
+                    contentKind = thumbnail.frame.kind == ContentKind::LeiaSbs ? "sbs" : thumbnail.frame.kind == ContentKind::LeiaLeft ? "left" : "desktop";
                     (phase == Phase::Sending ? preview : receivedPreview) = Preview(thumbnail.frame);
                 }
             }

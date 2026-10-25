@@ -108,6 +108,38 @@ struct Handle {
     HANDLE value{};
     ~Handle() { if (value) CloseHandle(value); }
 };
+int VerifyModes(uint16_t port) {
+    net::TcpConnection connection;
+    media::Decoder decoder(true);
+    std::string error;
+    const auto capabilities = media::HardwareDecodeCapabilities();
+    if (!capabilities) return 77;
+    Require(connection.Connect("127.0.0.1", port, 5000, error) == net::IoResult::Ok, error);
+    Require(connection.SendCapabilities(capabilities, 5000, error) == net::IoResult::Ok, error);
+    uint64_t previous{};
+    for (bool stereo : {true, false, true, false, true}) {
+        Require(connection.SendStereoMode(stereo, 1000, error) == net::IoResult::Ok, error);
+        const auto kind = stereo ? ContentKind::LeiaSbs : ContentKind::LeiaLeft;
+        unsigned matching{};
+        const auto deadline = Clock::now() + std::chrono::seconds(5);
+        while (matching < 4 && Clock::now() < deadline) {
+            media::EncodedFrame packet;
+            Require(connection.Receive(packet, 1500, error) == net::IoResult::Ok, error);
+            Require(packet.sequence > previous, "Mode switch reset source sequence"); previous = packet.sequence;
+            std::vector<Frame> frames;
+            Require(decoder.Decode(packet, frames, error) && decoder.hardware() && frames.size() == 1, "Mode switch hardware decode: " + error);
+            if (packet.kind != kind) continue; // In-flight old frames remain well tagged.
+            Require(matching || packet.keyframe, "Mode change did not start with a keyframe");
+            Require(packet.config.width == 3840 && packet.config.height == 2160 && packet.config.bitrate == 200000000 &&
+                packet.displayWidth == 3840 && packet.displayHeight == 2160 && frames[0].kind == kind,
+                "Sender mode change lost native eye resolution, bitrate or metadata");
+            ++matching;
+        }
+        Require(matching == 4, "Sender did not react to receiver mode");
+    }
+    std::cout << "GPU_MODE_VERIFIED transitions=5 encoded=3840x2160 bitrate=200Mbps reconnects=0 hardware_decode=1\n" << std::flush;
+    return 0;
+}
 int VerifyWire(uint16_t port, bool sink, unsigned measureSeconds) {
     net::TcpConnection connection;
     std::string error;
@@ -165,7 +197,7 @@ int VerifyWire(uint16_t port, bool sink, unsigned measureSeconds) {
         Require(measured >= 30ull * measureSeconds, "Wire sink received fewer than 30 FPS during its steady interval");
         const double seconds = std::chrono::duration<double>(last - measuredStart).count();
         std::sort(intervals.begin(), intervals.end());
-        std::cout << "GPU_WIRE_SINK version=5 encoded=3840x2160 display_eye=3840x2160 decoded=0 rendered=0 warmup_seconds=2"
+        std::cout << "GPU_WIRE_SINK version=6 encoded=3840x2160 display_eye=3840x2160 decoded=0 rendered=0 warmup_seconds=2"
             << " measured_frames=" << measured << " measured_seconds=" << seconds << " fps=" << measured / seconds
             << " missing_source_sequences=" << skipped << " packet_interval_p50_ms=" << intervals[intervals.size() / 2]
             << " packet_interval_p95_ms=" << intervals[size_t(intervals.size() * .95)]
@@ -174,7 +206,7 @@ int VerifyWire(uint16_t port, bool sink, unsigned measureSeconds) {
             << " audio_sample_frames=" << audioFrames << " audio_packets=" << audioPackets << '\n' << std::flush;
         return 0;
     }
-    std::cout << "GPU_WIRE_VERIFIED version=5 encoded=3840x2160 display_eye=3840x2160 keyframe=1 decoded=4 last_sequence="
+    std::cout << "GPU_WIRE_VERIFIED version=6 encoded=3840x2160 display_eye=3840x2160 keyframe=1 decoded=4 last_sequence="
         << previous << '\n' << std::flush;
     return 0;
 }
@@ -184,10 +216,11 @@ int wmain(int argc, wchar_t** argv) {
         std::wstring stopName;
         uint16_t verifyPort{};
         unsigned measureSeconds{10};
-        bool sink{};
+        bool sink{}, modes{};
         for (int n = 1; n < argc; ++n) {
             const std::wstring option = argv[n];
             if (option == L"--wire-sink") { sink = true; continue; }
+            if (option == L"--verify-modes") { modes = true; continue; }
             Require(n + 1 < argc, "Missing producer argument");
             if (option == L"--stop-event") stopName = argv[++n];
             else if (option == L"--verify-port") {
@@ -198,7 +231,7 @@ int wmain(int argc, wchar_t** argv) {
                 Require(seconds >= 1 && seconds <= 120, "Invalid measurement duration"); measureSeconds = unsigned(seconds);
             } else throw std::runtime_error("Unknown producer argument");
         }
-        if (verifyPort) return VerifyWire(verifyPort, sink, measureSeconds);
+        if (verifyPort) return modes ? VerifyModes(verifyPort) : VerifyWire(verifyPort, sink, measureSeconds);
         Require(!sink, "--wire-sink requires --verify-port");
         Require(!stopName.empty(), "--stop-event is required");
         Handle stop{OpenEventW(SYNCHRONIZE, FALSE, stopName.c_str())};

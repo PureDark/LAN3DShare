@@ -49,7 +49,7 @@ bool Valid(const Header& h) {
         h.width >= 4 && !(h.width & 1) && h.width <= MaxSide && h.height >= 2 && h.height <= MaxSide &&
         h.stride == h.width * 4 && uint64_t(h.stride) * h.height == h.bytes && h.bytes <= Capacity &&
         h.sourceWidth >= 4 && !(h.sourceWidth & 1) && h.sourceWidth <= MaxWidth &&
-        h.sourceHeight >= 2 && h.sourceHeight <= MaxHeight && h.kind <= uint32_t(ContentKind::LeiaSbs);
+        h.sourceHeight >= 2 && h.sourceHeight <= MaxHeight && h.kind <= uint32_t(ContentKind::LeiaLeft);
 }
 }
 struct PreviewPublisher::Impl {

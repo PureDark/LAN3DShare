@@ -108,10 +108,11 @@ struct SharedScene {
         return true;
     }
 };
-void CheckPixels(const Frame& frame, unsigned pattern) {
+void CheckPixels(const Frame& frame, unsigned pattern, bool leftOnly = false) {
     Require(ValidFrame(frame), "Decoded GPU input is invalid");
-    for (unsigned y : {1u, 5u, 10u}) for (unsigned x : {1u, 7u, 17u, 25u}) {
-        const unsigned px = (2 * x + 1) * frame.width / 64, py = (2 * y + 1) * frame.height / 24;
+    for (unsigned y : {1u, 5u, 10u}) for (unsigned sample : {1u, 7u, 17u, 25u}) {
+        const unsigned x = leftOnly ? sample / 2 : sample;
+        const unsigned px = (2 * x + 1) * frame.width / (leftOnly ? 32 : 64), py = (2 * y + 1) * frame.height / 24;
         const auto* pixel = frame.bgra.data() + size_t(py) * frame.stride + px * 4;
         const unsigned shade = 16 + ((x * 37 + y * 23 + pattern * 49) % 192);
         const std::array<unsigned, 3> expected{x >= 16 ? shade : 20u, 40u + pattern * 45, x >= 16 ? 20u : shade};
@@ -142,6 +143,31 @@ Frame ReadGpu(const Frame& input) {
         to[0] = from[2]; to[1] = from[1]; to[2] = from[0]; to[3] = from[3];
     }
     context->Unmap(staging.Get(), 0); return output;
+}
+void MonoTransitions(SharedScene& scene, CodecId codec, const LUID* target) {
+    Encoder encoder;
+    Decoder decoder(true, &scene.frames[0].adapterLuid);
+    std::string error;
+    unsigned index{};
+    // Deliberately keep coded dimensions unchanged: content changes must still
+    // restart from a keyframe, with the original left eye at full resolution.
+    for (bool leftOnly : {false, true, false, true}) {
+        const auto& input = scene.frames[index++ % 3];
+        CodecConfig config{3840, 2160, 60, 100000000, {}, codec};
+        config.leftEyeOnly = leftOnly;
+        Require(encoder.ConfigureGpu(config, input, error, target), "Mode configure: " + error);
+        std::vector<EncodedFrame> packets;
+        Require(encoder.EncodeGpu(input, packets, error) && packets.size() == 1, "Mode encode: " + error);
+        const auto& packet = packets.front();
+        Require(packet.keyframe && packet.config.width == 3840 && packet.config.height == 2160 &&
+            packet.config.bitrate == config.bitrate && packet.kind == (leftOnly ? ContentKind::LeiaLeft : ContentKind::LeiaSbs) &&
+            packet.displayWidth == 3840 && packet.displayHeight == 2160, "Mode switch lost keyframe, resolution, bitrate or content kind");
+        std::vector<Frame> frames;
+        Require(decoder.Decode(packet, frames, error) && decoder.hardware() && frames.size() == 1, "Mode decode: " + error);
+        Require(frames[0].kind == packet.kind, "Decoded mono content kind was lost");
+        CheckPixels(ReadGpu(frames[0]), (index - 1) % 3, leftOnly);
+    }
+    std::cout << CodecName(codec) << " GPU crop before scale; SBS/left/SBS/left keyframes, bitrate, NVDEC and eye pixels PASS\n";
 }
 void Run(SharedScene& scene, CodecId codec, const LUID* target = nullptr) {
     std::string error;
@@ -270,12 +296,18 @@ int main(int argc, char** argv) {
         std::cout << "NVENC_GPU_TEST split_override=" << splitLabel << '\n';
         SharedScene scene;
         if (!scene.Initialize()) { std::cout << "SKIP: NVIDIA D3D12 device unavailable\n"; return 77; }
-        LUID target{}; bool cross = argc > 1 && std::string(argv[1]) == "--cross";
+        const std::string option = argc > 1 ? argv[1] : "";
+        const bool mono = option == "--mono" || option == "--mono-cross";
+        LUID target{}; bool cross = option == "--cross" || option == "--mono-cross";
         if (cross) {
             const auto adapters = EncodeAdapters();
             const auto found = std::find_if(adapters.begin(), adapters.end(), [&](const auto& a) { return !SameAdapter(a.luid, scene.frames[0].adapterLuid); });
             if (found == adapters.end()) { std::cout << "SKIP: second physical NVIDIA GPU unavailable\n"; return 77; }
             target = found->luid;
+        }
+        if (mono) {
+            for (auto codec : {CodecId::H264, CodecId::Hevc, CodecId::Av1}) MonoTransitions(scene, codec, cross ? &target : nullptr);
+            return 0;
         }
         Run(scene, CodecId::Av1, cross ? &target : nullptr);
         Run(scene, CodecId::Hevc, cross ? &target : nullptr);

@@ -1,4 +1,4 @@
-# LAN3D TCP protocol v5
+# LAN3D TCP protocol v6
 
 One IPv4 TCP connection carries one sender's H.264, HEVC or AV1 desktop/SBS stream and system audio to one receiver.
 The connection begins with an IDR/keyframe. Each frame repeats its codec
@@ -14,9 +14,9 @@ are no native C++ structs or padding on the wire.
 | Offset | Bytes | Meaning |
 | --- | --- | --- |
 | 0 | 4 | Magic `0x4c334453` (`L3DS`) |
-| 4 | 4 | Protocol version, `5` (all other versions are rejected) |
+| 4 | 4 | Protocol version, `6` (all other versions are rejected) |
 | 8 | 4 | Header length, `80` |
-| 12 | 4 | Flags: bit 0 = keyframe; bit 1 = Leia SBS content; all other bits zero |
+| 12 | 4 | Flags: bit 0 = keyframe; bit 1 = Leia SBS; bit 2 = Leia left eye only; bits 1 and 2 are mutually exclusive; all other bits zero |
 | 16 | 4 | Total visible image width (both eyes when SBS) |
 | 20 | 4 | Visible height |
 | 24 | 4 | Integer nominal frame rate |
@@ -48,9 +48,9 @@ connection. This prevents audio from advancing independently through a network
 stall. Playback additionally gates the audio interval against video presentation;
 the transport itself does not schedule hardware playback or infer a receiver's
 wall-clock offset. Source QPC timestamps are comparable within a sender, not
-between the two computers. Both clients must be updated for v5.
+between the two computers. Both clients must be updated for v6.
 
-Logical display dimensions describe one eye for SBS and the whole image for
+Logical display dimensions describe one eye for SBS or left-only content and the whole image for
 desktop content. They are either both zero or width 1..8192 and height 1..4320.
 They preserve display aspect when pixels are packed non-uniformly: a 7680x2160
 SBS source encoded at 3840x2160 carries display dimensions 3840x2160, so each
@@ -121,10 +121,10 @@ session token); the sender verifies it and replies with four bytes `L3DA`.
 Wrong/malformed tokens, missing acknowledgments and any handshake timeout close
 the connection. The sender does not create its encoder before acceptance.
 Tokens are never included in diagnostic error messages. Existing diagnostic
-CLI sessions without `--session-token` omit this preface but still use wire v5.
+CLI sessions without `--session-token` omit this preface but still use wire v6.
 
 After the optional token preface, the receiver sends a 12-byte capability preface:
-`L3DC` (u32 `0x4c334443`), protocol version (u32 `5`), hardware decoder mask
+`L3DC` (u32 `0x4c334443`), protocol version (u32 `6`), hardware decoder mask
 (u32: H.264=1, HEVC=2, AV1=4). All integers are in network byte order. Unknown
 bits and versions close the connection. H.264 software decoding is implicit even
 with a zero mask. The sender intersects this mask with its NVENC capabilities,
@@ -140,6 +140,21 @@ selects the bind address and port.
 TCP packet loss can delay newer frames until retransmission; the sender's
 operation deadline disconnects a stalled peer. A later GPU codec/transport
 version can be introduced through a new protocol version.
+
+After capability negotiation the receiver may send fixed 8-byte mode messages in
+its direction of the same socket: `L3DM` (u32 `0x4c33444d`), followed by stereo
+preference (u32 `0` = left-only, `1` = packed SBS). The receiver sends its current
+choice initially, on F12 changes, and after reconnect. This is independent of
+forward video/audio framing. The sender polls without waiting, buffers fragments,
+rejects invalid values/magic or incomplete messages older than two seconds, and
+limits each poll to 32 reads. The latest completed preference wins.
+
+A mode change starts a new encoder keyframe even if coded dimensions are the
+same. The sender crops the original GPU left eye before scaling/conversion, within
+the selected output limits; target bitrate remains unchanged. Bit 2 marks this
+already-cropped image so the receiver neither crops it again nor weaves it while
+waiting for a requested SBS transition. Desktop content is never cropped.
+Versions before 6 are incompatible; both clients must update together.
 
 The local capture mapping remains version 2: `Local\\LAN3DShare.v2.<PID>` plus
 its `.lock` mutex. Its explicitly validated header contains `kind` as uint32:

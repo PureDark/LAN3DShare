@@ -6,7 +6,7 @@
 namespace lan3d::net {
 enum class IoResult { Ok, Timeout, Closed, Error };
 bool ValidSessionToken(const std::string& token);
-// TCP v5 atomically carries one video access unit and its bounded 48 kHz stereo
+// TCP v6 atomically carries one video access unit and its bounded 48 kHz stereo
 // S16LE audio interval. Audio ends no later than the paired video's timestamp.
 // Close may be called from another thread to interrupt an operation. Join that
 // thread before destroying the object or calling Connect/Listen again.
@@ -28,6 +28,10 @@ public:
     // H.264 software decoding is the common fallback, even when the mask is 0.
     IoResult SendCapabilities(uint32_t hardwareDecoders, uint32_t timeoutMs, std::string& error);
     IoResult ReceiveCapabilities(uint32_t& hardwareDecoders, uint32_t timeoutMs, std::string& error);
+    // Reverse direction, after capabilities. Called by the respective network
+    // worker only. Poll buffers fragmented messages without blocking video.
+    IoResult SendStereoMode(bool enabled, uint32_t timeoutMs, std::string& error);
+    IoResult PollStereoMode(bool& enabled, std::string& error);
     IoResult Send(const media::EncodedFrame& packet, uint32_t timeoutMs, std::string& error);
     // Idle timeout preserves connection. Partial-packet timeout closes it so a
     // subsequent Receive can never mistake a payload fragment for a new header.

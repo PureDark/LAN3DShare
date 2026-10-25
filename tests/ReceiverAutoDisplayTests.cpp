@@ -38,6 +38,43 @@ private:
     ReceiverCoreState (*getCore_)(){};
     ReceiverWeaverState (*getWeaver_)(){};
 };
+void StereoToggle(HWND window, const std::filesystem::path& directory, const FakeRuntime& fixture, bool legacy) {
+    SetEnvironmentVariableW(L"LAN3D_RECEIVER_TEST_LEGACY", legacy ? L"1" : nullptr);
+    const auto before = fixture.Core();
+    {
+        lan3d::receiver::Renderer renderer;
+        renderer.Open(window, MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), false, directory, true);
+        auto sbs = Pattern(lan3d::ContentKind::LeiaSbs);
+        sbs.displayWidth = 640; sbs.displayHeight = 360;
+        renderer.Upload(sbs);
+        std::string error;
+        for (unsigned i = 0; i < 3; ++i) {
+            renderer.SetStereoEnabled(true);
+            Require(renderer.SetFullscreen(true, error) && renderer.IsWeaving() && renderer.Draw(), "3D toggle failed");
+            const auto weaves = fixture.Weaver().weaveCount;
+            renderer.SetStereoEnabled(false);
+            Require(renderer.SetFullscreen(true, error) && !renderer.IsWeaving() && renderer.Draw(true),
+                "2D toggle did not render only the left eye at the correct aspect");
+            Require(fixture.Weaver().weaveCount == weaves, "2D mode still called the weaver");
+            renderer.Upload(Pattern(lan3d::ContentKind::LeiaLeft));
+            Require(renderer.SetFullscreen(true, error) && renderer.Draw(true), "Left-only packet was cropped a second time");
+            renderer.SetStereoEnabled(true);
+            Require(renderer.SetFullscreen(true, error) && !renderer.IsWeaving() && renderer.Draw(true),
+                "Pending 3D request wove a left-only packet");
+            renderer.SetStereoEnabled(false);
+            renderer.Upload(Pattern(lan3d::ContentKind::Desktop));
+            Require(renderer.SetFullscreen(true, error) && renderer.Draw(true), "2D toggle cropped ordinary desktop");
+            renderer.Upload(sbs);
+            Require(renderer.SetFullscreen(true, error) && !renderer.IsWeaving() && renderer.Draw(true),
+                "source change lost the selected 2D mode");
+        }
+        renderer.SetStereoEnabled(true);
+        Require(renderer.SetFullscreen(false, error) && !renderer.IsWeaving() && renderer.Draw(true),
+            "windowed 3D preference unexpectedly enabled weaving");
+    }
+    Require(fixture.Core().created - before.created == 3 && fixture.Core().destroyed - before.destroyed == 3,
+        "2D/3D toggling leaked runtime contexts");
+}
 void FullscreenLifecycle(HWND window, const std::filesystem::path& directory, const FakeRuntime& fixture, bool legacy) {
     SetEnvironmentVariableW(L"LAN3D_RECEIVER_TEST_LEGACY", legacy ? L"1" : nullptr);
     const auto coreBefore = fixture.Core();
@@ -128,6 +165,8 @@ int wmain(int argc, wchar_t** argv) try {
         FakeRuntime fixture(directory);
         FullscreenLifecycle(window, directory, fixture, false);
         FullscreenLifecycle(window, directory, fixture, true);
+        StereoToggle(window, directory, fixture, false);
+        StereoToggle(window, directory, fixture, true);
     }
     Require(!GetModuleHandleW(L"SimulatedRealityDirectX.dll") && !GetModuleHandleW(L"SimulatedRealityCore.dll"),
         "Receiver leaked fake runtime module references");

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(LAN3DShare VERSION 0.8.2 LANGUAGES C CXX RC)
+project(LAN3DShare VERSION 0.8.3 LANGUAGES C CXX RC)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "LAN3DShare requires Windows x64 MSVC for the LeiaSR C++ ABI")
 endif()
@@ -122,6 +122,9 @@ if(BUILD_TESTING)
     target_link_libraries(NvEncoderGpuTests PRIVATE lan3d_media lan3d_common d3d12)
     add_test(NAME NvEncoderGpu COMMAND NvEncoderGpuTests)
     add_test(NAME NvEncoderCrossGpu COMMAND NvEncoderGpuTests --cross)
+    add_test(NAME NvEncoderMono COMMAND NvEncoderGpuTests --mono)
+    add_test(NAME NvEncoderMonoCross COMMAND NvEncoderGpuTests --mono-cross)
+    set_tests_properties(NvEncoderMono NvEncoderMonoCross PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
     set_tests_properties(NvEncoderCrossGpu PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
     set_tests_properties(NvEncoderGpu PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
     add_executable(CaptureSnapshots tools/CaptureSnapshots.cpp)
@@ -354,6 +357,10 @@ if(BUILD_TESTING)
         -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/GpuEndToEnd.ps1" -BinaryDir "${PACKAGE_DIR}"
         -OutputDir "${CMAKE_BINARY_DIR}/test-results/gpu-end-to-end")
     set_tests_properties(GpuEndToEnd PROPERTIES TIMEOUT 75 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+    add_test(NAME GpuModeEndToEnd COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/GpuEndToEnd.ps1" -BinaryDir "${PACKAGE_DIR}" -Modes
+        -OutputDir "${CMAKE_BINARY_DIR}/test-results/gpu-mode-end-to-end")
+    set_tests_properties(GpuModeEndToEnd PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
     add_test(NAME GpuSenderWireSink COMMAND powershell -NoProfile -ExecutionPolicy Bypass
         -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/GpuEndToEnd.ps1" -BinaryDir "${PACKAGE_DIR}" -WireSink
         -OutputDir "${CMAKE_BINARY_DIR}/test-results/gpu-sender-wire-sink")

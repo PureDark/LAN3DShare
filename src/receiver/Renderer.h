@@ -15,6 +15,7 @@ public:
     LUID AdapterLuid() const;
     bool Thumbnail(const Frame& metadata, Frame& thumbnail);
     bool SetFullscreen(bool fullscreen, std::string& error);
+    void SetStereoEnabled(bool enabled);
     bool Draw(bool verifyPreview = false);
     // Draw's result also serves hidden renderer tests; audio needs the stricter
     // result of a visible, non-occluded Present with a ready video image.
@@ -22,7 +23,7 @@ public:
     bool HasFrame() const { return input_ != nullptr; }
     ContentKind Content() const { return kind_; }
     bool IsWeaving() const { return runtimeActive_; }
-    const char* Mode() const { return runtimeActive_ ? runtime_.Mode() : preview_ ? "SBS PREVIEW (2D)" : kind_ == ContentKind::LeiaSbs ? "LEFT EYE (2D)" : "DESKTOP (2D)"; }
+    const char* Mode() const { return runtimeActive_ ? runtime_.Mode() : preview_ && stereoEnabled_ && kind_ == ContentKind::LeiaSbs ? "SBS PREVIEW (2D)" : IsLeia(kind_) ? "LEFT EYE (2D)" : "DESKTOP (2D)"; }
 private:
     void Resize();
     void DrainGpu() noexcept;
@@ -30,6 +31,7 @@ private:
     void DisableRuntime() noexcept;
     HWND window_{};
     bool preview_{}, autoDisplay_{}, runtimeActive_{}, lastPresentSucceeded_{};
+    bool stereoEnabled_{true};
     ContentKind kind_{ContentKind::Desktop};
     std::filesystem::path runtimeDirectory_;
     unsigned width_{}, height_{}, inputWidth_{}, inputHeight_{};

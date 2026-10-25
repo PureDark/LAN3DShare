@@ -635,7 +635,7 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
     <button class="v-btn" id="viewer-close" title="关闭并断开"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>
   <div class="audio-meter" id="viewer-audio"></div>
-  <div class="v-hint" data-show="viewer">F11 全屏 · Esc 还原 · Ctrl＋↑／↓ 音量</div>
+  <div class="v-hint" data-show="viewer">F11 全屏 · F12 切换 2D / 3D · Esc 还原 · Ctrl＋↑／↓ 音量</div>
   <div class="v-toast" data-show="viewer-fallback">
     <span class="w"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg></span>
     本机未能加载 LeiaSR，3D 画面暂以 2D 显示，连接不受影响
@@ -761,13 +761,15 @@ function previewImage(image, sbs, draw, received) {
 
 function renderPreview() {
   const source = model.sources.find(s => String(s.id) === String(model.selectedSource));
-  const sbs = model.contentKind === 'sbs' || source?.kind === 'test';
-  const signature = JSON.stringify([source, sbs, model.preview, model.phase, model.designScene]);
+  const leftOnly = model.contentKind === 'left';
+  const sbs = model.contentKind === 'sbs' || (model.phase !== 'sending' && source?.kind === 'test');
+  const signature = JSON.stringify([source, sbs, leftOnly, model.preview, model.phase, model.designScene]);
   if (previewSignature !== signature) {
     previewSignature = signature;
     const placeholder = !validImage(model.preview) && !model.designScene && source?.kind !== 'test';
     let badge;
     if (model.phase === 'sending' && sbs) badge = '<span class="dot live"></span>3D 左右并排';
+    else if (model.phase === 'sending' && leftOnly) badge = '2D · 仅传输左眼';
     else if (model.phase === 'sending') badge = validImage(model.preview) ? '普通画面' : '等待画面';
     else if (sbs) badge = ic3d + '3D 左右并排';
     else if (source?.kind === 'program') badge = ic3d + '连接后启动';
@@ -779,11 +781,11 @@ function renderPreview() {
     text('#src-sub', source?.sub || (source?.width && source?.height ? `${source.width} × ${source.height}` : '更换以选择屏幕或程序'));
   }
   const receivedSbs = model.contentKind === 'sbs';
-  const receivedSignature = JSON.stringify([model.receivedPreview, receivedSbs, model.designScene]);
+  const receivedSignature = JSON.stringify([model.receivedPreview, model.contentKind, model.designScene]);
   if (receivedPreviewSignature !== receivedSignature) {
     receivedPreviewSignature = receivedSignature;
     const placeholder = !validImage(model.receivedPreview) && !model.designScene;
-    const badge = receivedSbs ? `${ic3d}3D 画面 · 窗口内显示左眼` : '普通画面';
+    const badge = receivedSbs ? `${ic3d}3D 画面 · 窗口内显示左眼` : leftOnly ? '2D · 左眼' : '普通画面';
     $('#recv-preview').innerHTML = previewImage(model.receivedPreview, receivedSbs, scene, true) + `<span class="badge">${placeholder ? '预览占位 · ' : ''}${badge}</span>`;
   }
 }
@@ -1011,7 +1013,7 @@ function drawMain() {
   text('#send-note', model.note || model.sourceNotice || (model.phase === 'sending' ? model.contentKind === 'sbs' ? '对方已自动打开画面窗口，可以自由缩放，或全屏以 3D 观看。' : '对方已自动打开画面窗口，可以自由缩放，或全屏观看。' : '连接就绪后，对方会自动打开画面窗口。'));
   const monitor = (model.monitors || []).find(item => Number(item.id) === Number(model.settings?.monitor));
   $('#receive-description').innerHTML = model.phase === 'preparingReceive' ? '正在准备接收画面…' : `画面窗口已在 <b>${escapeHtml(monitor?.name || '接收屏幕')}</b> 打开，<br>可以随意移动和拉伸。`;
-  text('#receive-hint', model.contentKind === 'sbs' ? '全屏时由本机 LeiaSR 交织为 3D' : '普通画面以 2D 显示');
+  text('#receive-hint', model.contentKind === 'sbs' ? '全屏时由本机 LeiaSR 交织为 3D；F12 切换 2D' : model.contentKind === 'left' ? '正在接收左眼画面；F12 恢复 3D 传输' : '普通画面以 2D 显示');
   text('#send-stats', model.stats || model.note || '正在等待画面');
   text('#receive-stats', model.stats || model.note || '正在等待画面');
   $('#send-stats').title = model.stats || model.note || '';
@@ -1028,11 +1030,12 @@ function drawViewer() {
   viewerDemo.toggleAttribute('hidden', !model.designScene);
   viewer.style.background = model.designScene ? '#07080C' : 'transparent';
   const sbs = model.kind === 'sbs';
-  viewer.classList.toggle('interweaving', !!model.fullscreen && sbs && !fallback && !model.designScene);
+  const stereo = model.stereoEnabled !== false;
+  viewer.classList.toggle('interweaving', !!model.fullscreen && sbs && stereo && !model.leftEyeOnly && !fallback && !model.designScene);
   if (viewer.classList.contains('interweaving')) hideViewerControls();
   text('#viewer-name', model.peerName || '正在接收');
-  text('#viewer-kind', sbs && !fallback ? '3D' : '2D');
-  $('#viewer-kind').title = sbs ? '正在接收左右并排画面；全屏时显示 3D' : '普通画面';
+  text('#viewer-kind', sbs && stereo && !fallback ? model.leftEyeOnly ? '等待 3D' : '3D' : sbs ? '2D · 左眼' : '2D');
+  $('#viewer-kind').title = sbs ? 'F12 切换 2D 左眼 / 3D；3D 需全屏显示' : '普通画面';
   $('.v-hint').hidden = fallback || !!model.fullscreen;
   $('.v-toast').hidden = !fallback;
   $('#viewer-fullscreen').title = model.fullscreen ? '退出全屏' : '全屏';
@@ -1239,6 +1242,9 @@ document.addEventListener('keydown', event => {
     event.preventDefault();
     model.volumePercent = Math.max(0, Math.min(800, (model.volumePercent ?? 100) + (event.key === 'ArrowUp' ? 25 : -25)));
     renderVolume(); post('volume', { percent: model.volumePercent });
+  } else if (event.key === 'F12' && isViewer()) {
+    event.preventDefault();
+    if (!event.repeat) post('toggleStereo');
   } else if (event.key === 'F11') {
     event.preventDefault();
     if (isViewer() || model.phase === 'receiving') post('fullscreen');

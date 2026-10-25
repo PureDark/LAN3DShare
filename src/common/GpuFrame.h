@@ -21,7 +21,7 @@ inline bool ValidGpuFrame(const GpuFrame& f) {
     return f.width >= 4 && !(f.width & 1) && f.width <= MaxWidth &&
         f.height >= 2 && f.height <= MaxHeight && f.sequence && f.timestamp100ns &&
         (f.format == DXGI_FORMAT_B8G8R8A8_UNORM || f.format == DXGI_FORMAT_R8G8B8A8_UNORM) &&
-        (f.kind == ContentKind::Desktop || f.kind == ContentKind::LeiaSbs) &&
+        (f.kind == ContentKind::Desktop || IsLeia(f.kind)) &&
         f.textureName[0] && f.textureName[159] == 0;
 }
 }

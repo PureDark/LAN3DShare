@@ -122,7 +122,7 @@ void Renderer::Upload(const Frame& frame) {
     kind_ = frame.kind;
     displayWidth_ = frame.displayWidth ? frame.displayWidth : (kind_ == ContentKind::LeiaSbs ? frame.width / 2 : frame.width);
     displayHeight_ = frame.displayHeight ? frame.displayHeight : frame.height;
-    if (kind_ == ContentKind::Desktop && runtimeActive_) DisableRuntime();
+    if (kind_ != ContentKind::LeiaSbs && runtimeActive_) DisableRuntime();
     const auto format = frame.gpu && frame.gpu->metadata.format == DXGI_FORMAT_R8G8B8A8_UNORM ? DXGI_FORMAT_R8G8B8A8_TYPELESS : DXGI_FORMAT_B8G8R8A8_TYPELESS;
     if (frame.width != inputWidth_ || frame.height != inputHeight_ || format != inputFormat_) {
         ID3D11ShaderResourceView* nullView{};
@@ -217,9 +217,13 @@ void Renderer::DisableRuntime() noexcept {
     runtime_.Close();
     runtimeActive_ = false;
 }
+void Renderer::SetStereoEnabled(bool enabled) {
+    stereoEnabled_ = enabled;
+    if (!enabled && runtimeActive_) DisableRuntime();
+}
 bool Renderer::SetFullscreen(bool fullscreen, std::string& error) {
     error.clear();
-    const bool wantsWeave = !preview_ && fullscreen && kind_ == ContentKind::LeiaSbs && input_;
+    const bool wantsWeave = stereoEnabled_ && !preview_ && fullscreen && kind_ == ContentKind::LeiaSbs && input_;
     if (!wantsWeave) { if (runtimeActive_) DisableRuntime(); return true; }
     if (runtimeActive_) return true;
     try {
@@ -247,7 +251,7 @@ bool Renderer::Draw(bool verifyPreview) {
     bool ready = false;
     if (input_) {
         if (!runtimeActive_) {
-            const bool leftEye = !preview_ && kind_ == ContentKind::LeiaSbs;
+            const bool leftEye = (!preview_ || !stereoEnabled_) && kind_ == ContentKind::LeiaSbs;
             const float imageWidth = float(displayWidth_ * (kind_ == ContentKind::LeiaSbs && !leftEye ? 2u : 1u));
             const float scale = (std::min)(float(width_) / imageWidth, float(height_) / float(displayHeight_));
             D3D11_VIEWPORT imageViewport{(float(width_) - imageWidth * scale) * .5f,
@@ -287,8 +291,8 @@ void Renderer::VerifyPreview() {
     Check(dc_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "Map verification readback");
     const auto* row = static_cast<const uint8_t*>(mapped.pData) + size_t(height_ / 2) * mapped.RowPitch;
     bool matches = true;
-    const auto* expectedRight = !preview_ && kind_ == ContentKind::LeiaSbs ? verifyLeft_ : verifyRight_;
-    const float aspect = float(displayWidth_ * (preview_ && kind_ == ContentKind::LeiaSbs ? 2u : 1u)) / displayHeight_;
+    const auto* expectedRight = (!preview_ || !stereoEnabled_) && kind_ == ContentKind::LeiaSbs ? verifyLeft_ : verifyRight_;
+    const float aspect = float(displayWidth_ * (preview_ && stereoEnabled_ && kind_ == ContentKind::LeiaSbs ? 2u : 1u)) / displayHeight_;
     const float imageWidth = (std::min)(float(width_), float(height_) * aspect);
     const float left = (float(width_) - imageWidth) * .5f;
     // Diagnostic patterns are uniform inside each eye. Include positions near

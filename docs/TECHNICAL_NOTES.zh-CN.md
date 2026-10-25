@@ -122,6 +122,6 @@ Windows x64 局域网画面共享。两台电脑使用同一个图形客户端�
 .\package.ps1
 ```
 
-GUI、会话发现、采集、编解码、传输、接收显示、系统声音的源代码分别位于 `src/ui`、`src/session`、`src/capture`、`src/media`、`src/net`、`src/receiver`、`src/audio`。CPU 采集总线保持 v2，GPU 共享纹理使用独立的小型元数据总线，媒体协议为 v5；两端建议一起升级到 0.7.5，0.7.0 / 0.7.1 同为 v5，0.6.x 及更早版本会明确提示协议不兼容。音量控制只调整本机接收播放，不改变媒体协议。诊断入口可用 `--no-audio` 关闭音频，接收端可用 `--volume-percent 0..800` 指定初始播放音量。旧版发送端 `AudioGainPercent` 设置及参数已移除。
+GUI、会话发现、采集、编解码、传输、接收显示、系统声音的源代码分别位于 `src/ui`、`src/session`、`src/capture`、`src/media`、`src/net`、`src/receiver`、`src/audio`。CPU 采集总线保持 v2，GPU 共享纹理使用独立的小型元数据总线，媒体协议为 v6；两端需一起升级到 0.8.3，以支持接收端 F12 控制发送端只传左眼。旧媒体协议会明确提示不兼容。音量控制只调整本机接收播放，不改变媒体协议。诊断入口可用 `--no-audio` 关闭音频，接收端可用 `--volume-percent 0..800` 指定初始播放音量。旧版发送端 `AudioGainPercent` 设置及参数已移除。
 
 验证范围见 `VALIDATION.md`。本机回环、模拟 runtime 和 WARP 测试不替代真实双机局域网、游戏 Mod、LeiaSR/Titan 显示效果及性能验收。SDK 头文件间接引用 OpenCV，工程延迟链接 SDK 的 `opencv_world343.lib`；产品代码不调用 OpenCV，也不静态链接 Leia runtime。MinHook 与 nv-codec-headers 许可证随包附带。

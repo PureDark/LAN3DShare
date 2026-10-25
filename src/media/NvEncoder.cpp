@@ -225,7 +225,7 @@ struct NvEncoder::Impl {
             return HrError(error, "create NV12 video output view", hr);
         videoContext->VideoProcessorSetStreamAutoProcessingMode(processor.Get(), 0, FALSE);
         videoContext->VideoProcessorSetStreamFrameFormat(processor.Get(), 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
-        RECT sourceRect{ 0, 0, static_cast<LONG>(inputWidth), static_cast<LONG>(inputHeight) };
+        RECT sourceRect{ 0, 0, static_cast<LONG>(config.leftEyeOnly ? inputWidth / 2 : inputWidth), static_cast<LONG>(inputHeight) };
         RECT outputRect{ 0, 0, static_cast<LONG>(config.width), static_cast<LONG>(codedHeight) };
         videoContext->VideoProcessorSetStreamSourceRect(processor.Get(), 0, TRUE, &sourceRect);
         videoContext->VideoProcessorSetStreamDestRect(processor.Get(), 0, TRUE, &outputRect);
@@ -513,7 +513,7 @@ bool NvEncoder::ConfigureGpu(const CodecConfig& config, const GpuFrame& input, s
     error.clear();
     auto& p = *impl_;
     p.Reset();
-    if (!ValidConfig(config) || !ValidGpuFrame(input)) {
+    if (!ValidConfig(config) || !ValidGpuFrame(input) || (config.leftEyeOnly && input.kind != ContentKind::LeiaSbs)) {
         error = "Invalid NVIDIA shared GPU input configuration";
         return false;
     }
@@ -595,7 +595,7 @@ bool NvEncoder::EncodeGpu(const GpuFrame& frame, std::vector<EncodedFrame>& pack
     auto& p = *impl_;
     const auto started = Clock::now(); p.timing = {};
     if (!p.initialized || !p.gpuInput) { error = "NVIDIA shared GPU-input encoder is not configured"; return false; }
-    if (!ValidGpuFrame(frame) || frame.adapterLuid.LowPart != p.sourceLuid.LowPart ||
+    if (!ValidGpuFrame(frame) || (p.config.leftEyeOnly && frame.kind != ContentKind::LeiaSbs) || frame.adapterLuid.LowPart != p.sourceLuid.LowPart ||
         frame.adapterLuid.HighPart != p.sourceLuid.HighPart) {
         error = "Shared GPU frame is invalid or belongs to a different adapter";
         return false;
@@ -648,7 +648,8 @@ bool NvEncoder::EncodeGpu(const GpuFrame& frame, std::vector<EncodedFrame>& pack
     // synchronous bitstream completion also completes the preceding VP read
     // of the source, so only a successful return permits releasing the lease.
     p.timing.inputSubmitMs = ElapsedMs(started);
-    const bool encoded = p.EncodeConverted(frame.sequence, frame.timestamp100ns, frame.kind, packets, error);
+    const bool encoded = p.EncodeConverted(frame.sequence, frame.timestamp100ns,
+        p.config.leftEyeOnly ? ContentKind::LeiaLeft : frame.kind, packets, error);
     if (encoded) for (auto& packet : packets) {
         packet.displayWidth = frame.kind == ContentKind::LeiaSbs ? frame.width / 2 : frame.width;
         packet.displayHeight = frame.height;

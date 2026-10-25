@@ -144,7 +144,7 @@ void TransportBounds() {
         Require(connect(raw, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0, "Raw test connect failed");
         Require(server.Accept(incoming, 1000, error) == IoResult::Ok, error);
         std::array<uint8_t, 80> h{};
-        Put32(h.data(), 0x4c334453); Put32(h.data() + 4, 5); Put32(h.data() + 8, 80); Put32(h.data() + 12, 3);
+        Put32(h.data(), 0x4c334453); Put32(h.data() + 4, 6); Put32(h.data() + 8, 80); Put32(h.data() + 12, 3);
         Put32(h.data() + 16, 640); Put32(h.data() + 20, 360); Put32(h.data() + 24, 30); Put32(h.data() + 28, 10000000);
         Put32(h.data() + 52, 0xffffffff); Put32(h.data() + 56, 0x48323634);
         Require(send(raw, reinterpret_cast<const char*>(h.data()), partial ? 10 : 80, 0) > 0, "Raw test send failed");
@@ -159,7 +159,7 @@ void TransportBounds() {
         Require(connect(raw, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0, "EOF test connect failed");
         Require(server.Accept(incoming, 1000, error) == IoResult::Ok, error);
         std::array<uint8_t, 81> h{};
-        Put32(h.data(), 0x4c334453); Put32(h.data() + 4, 5); Put32(h.data() + 8, 80); Put32(h.data() + 12, 3);
+        Put32(h.data(), 0x4c334453); Put32(h.data() + 4, 6); Put32(h.data() + 8, 80); Put32(h.data() + 12, 3);
         Put32(h.data() + 16, 640); Put32(h.data() + 20, 360); Put32(h.data() + 24, 30); Put32(h.data() + 28, 10000000);
         Put32(h.data() + 52, 4); Put32(h.data() + 56, 0x48323634);
         if (bytes) Require(send(raw, reinterpret_cast<const char*>(h.data()), int(bytes), 0) == int(bytes), "EOF test send failed");
@@ -216,7 +216,7 @@ void CodecNegotiation() {
         TcpConnection sender;
         Require(server.Accept(sender, 1000, error) == IoResult::Ok, error);
         std::array<uint8_t, 12> header{};
-        Put32(header.data(), 0x4c334443); Put32(header.data() + 4, version); Put32(header.data() + 8, version == 5 ? 8 : 7);
+        Put32(header.data(), 0x4c334443); Put32(header.data() + 4, version); Put32(header.data() + 8, version == 6 ? 8 : 7);
         Require(send(raw, reinterpret_cast<const char*>(header.data()), int(header.size()), 0) == int(header.size()), "Capability raw send failed");
         uint32_t mask{};
         Require(sender.ReceiveCapabilities(mask, 1000, error) == IoResult::Error && !sender.IsOpen(), "Invalid capabilities were accepted");
@@ -259,6 +259,69 @@ void IdleDisconnect() {
     Require(!sender.IsOpen(), "Paused stream did not discover the receiver's reset");
     std::cout << "Idle peer peek: live socket, preserved protocol bytes, FIN/reset and paused-source reconnect OK\n";
 }
+void StereoControl() {
+    TcpServer server;
+    TcpConnection sender, receiver;
+    std::string error;
+    Require(server.Listen("127.0.0.1", 0, error), error);
+    Require(receiver.Connect("127.0.0.1", server.port(), 1000, error) == IoResult::Ok, error);
+    Require(server.Accept(sender, 1000, error) == IoResult::Ok, error);
+    Require(receiver.SendCapabilities(7, 1000, error) == IoResult::Ok, error);
+    uint32_t caps{};
+    Require(sender.ReceiveCapabilities(caps, 1000, error) == IoResult::Ok, error);
+    auto poll = [&](bool& enabled) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        IoResult result;
+        do {
+            result = sender.PollStereoMode(enabled, error);
+            if (result != IoResult::Timeout) return result;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (std::chrono::steady_clock::now() < deadline);
+        return result;
+    };
+    for (bool mode : {true, false, true, false}) {
+        Require(receiver.SendStereoMode(mode, 1000, error) == IoResult::Ok, error);
+        bool enabled = !mode;
+        Require(poll(enabled) == IoResult::Ok && enabled == mode, "Receiver mode did not reach sender");
+        EncodedFrame input;
+        input.config = {640, 360, 60, 100000000, {}, CodecId::H264};
+        input.kind = mode ? ContentKind::LeiaSbs : ContentKind::LeiaLeft;
+        input.keyframe = true; input.data = {1, 2, 3};
+        Require(sender.Send(input, 1000, error) == IoResult::Ok, error);
+        EncodedFrame output;
+        Require(receiver.Receive(output, 1000, error) == IoResult::Ok && output.kind == input.kind, "Forward mono/SBS tag lost during reverse control");
+    }
+    const auto start = std::chrono::steady_clock::now();
+    bool enabled = true;
+    for (unsigned n = 0; n < 100; ++n) Require(sender.PollStereoMode(enabled, error) == IoResult::Timeout, "Idle control did not return immediately");
+    Require(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(100), "Mode polling blocked capture");
+    receiver.Close(); sender.Close();
+    // Reuse the same sender object; partial/malformed controls cannot leak into
+    // a replacement socket, and incomplete input never blocks its render loop.
+    for (unsigned scenario = 0; scenario < 5; ++scenario) {
+        SOCKET raw = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        sockaddr_in address{}; address.sin_family = AF_INET; address.sin_port = htons(server.port());
+        inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+        Require(connect(raw, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "Mode raw connect failed");
+        Require(server.Accept(sender, 1000, error) == IoResult::Ok, error);
+        std::array<uint8_t, 12> hello{};
+        Put32(hello.data(), 0x4c334443); Put32(hello.data() + 4, 6); Put32(hello.data() + 8, 7);
+        Require(send(raw, reinterpret_cast<const char*>(hello.data()), 12, 0) == 12, "Mode capability send failed");
+        Require(sender.ReceiveCapabilities(caps, 1000, error) == IoResult::Ok, error);
+        std::array<uint8_t, 8> message{};
+        Put32(message.data(), scenario == 1 ? 0 : 0x4c33444d); Put32(message.data() + 4, scenario == 2 ? 2 : 0);
+        Require(send(raw, reinterpret_cast<const char*>(message.data()), 3, 0) == 3, "Partial mode send failed");
+        Require(sender.PollStereoMode(enabled, error) == IoResult::Timeout && sender.IsOpen(), "Partial mode blocked or closed the stream");
+        if (scenario == 3) shutdown(raw, SD_SEND);
+        else if (scenario == 4) std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+        else Require(send(raw, reinterpret_cast<const char*>(message.data() + 3), 5, 0) == 5, "Mode suffix send failed");
+        const auto result = poll(enabled);
+        Require(scenario == 0 ? result == IoResult::Ok && !enabled : result == IoResult::Error && !sender.IsOpen(),
+            "Fragmented/malformed/expired mode handling failed");
+        closesocket(raw); sender.Close();
+    }
+    std::cout << "Receiver stereo control: duplex, nonblocking, partial input, invalid messages, deadline and reconnect PASS\n";
+}
 void AudioBounds() {
     TcpServer server;
     TcpConnection incoming, outgoing;
@@ -274,7 +337,7 @@ void AudioBounds() {
     };
     auto header = [] {
         std::array<uint8_t, 80> h{};
-        Put32(h.data(), 0x4c334453); Put32(h.data() + 4, 5); Put32(h.data() + 8, 80); Put32(h.data() + 12, 3);
+        Put32(h.data(), 0x4c334453); Put32(h.data() + 4, 6); Put32(h.data() + 8, 80); Put32(h.data() + 12, 3);
         Put32(h.data() + 16, 640); Put32(h.data() + 20, 360); Put32(h.data() + 24, 30); Put32(h.data() + 28, 10000000);
         Put64(h.data() + 32, 23); Put64(h.data() + 40, 20000000);
         Put32(h.data() + 48, 3); Put32(h.data() + 52, 4); Put32(h.data() + 56, uint32_t(CodecId::H264));
@@ -295,7 +358,7 @@ void AudioBounds() {
             "Wire PCM must be signed 16-bit little-endian, independently of header byte order");
         closesocket(raw);
     }
-    for (unsigned bad = 0; bad < 14; ++bad) {
+    for (unsigned bad = 0; bad < 16; ++bad) {
         const SOCKET raw = connectRaw();
         auto h = header();
         switch (bad) {
@@ -313,6 +376,8 @@ void AudioBounds() {
         case 11: Put32(h.data() + 60, 3840u << 16); break;
         case 12: Put32(h.data() + 60, 2160); break;
         case 13: Put32(h.data() + 60, ((MaxWidth + 1) << 16) | (MaxHeight + 1)); break;
+        case 14: Put32(h.data() + 12, 7); break; // Conflicting SBS/left-only flags.
+        case 15: Put32(h.data() + 12, 9); break; // Unknown video flags.
         }
         const int headerBytes = bad == 9 ? 64 : bad == 10 ? 12 : int(h.size());
         Require(send(raw, reinterpret_cast<const char*>(h.data()), headerBytes, 0) == headerBytes, "Raw audio header send failed");
@@ -370,6 +435,7 @@ int main() {
         TransportBounds();
         IdleDisconnect();
         CodecNegotiation();
+        StereoControl();
         AudioBounds();
         Loopback(640, 361, 8);
         Loopback(650, 359, 3);

@@ -80,8 +80,12 @@ void Handshake(SOCKET client, SOCKET sender, Clock::time_point deadline) {
     Check(Transfer(sender, false, accepted.data(), accepted.size(), deadline) && U32(accepted.data()) == 0x4c334441, "Production sender rejected token");
     Check(Transfer(client, true, accepted.data(), accepted.size(), deadline), "Forwarding authentication response failed");
     std::array<uint8_t, 12> caps{};
-    Check(Transfer(client, false, caps.data(), caps.size(), deadline) && U32(caps.data()) == 0x4c334443 && U32(caps.data() + 4) == 5 && !(U32(caps.data() + 8) & ~7u), "Missing real v5 decoder capabilities");
+    Check(Transfer(client, false, caps.data(), caps.size(), deadline) && U32(caps.data()) == 0x4c334443 && U32(caps.data() + 4) == 6 && !(U32(caps.data() + 8) & ~7u), "Missing real v6 decoder capabilities");
     Check(Transfer(sender, true, caps.data(), caps.size(), deadline), "Forwarding decoder capabilities failed");
+    std::array<uint8_t, 8> mode{};
+    Check(Transfer(client, false, mode.data(), mode.size(), deadline) && U32(mode.data()) == 0x4c33444d && U32(mode.data() + 4) <= 1,
+        "Missing initial receiver display mode");
+    Check(Transfer(sender, true, mode.data(), mode.size(), deadline), "Forwarding display mode failed");
 }
 }
 
@@ -137,7 +141,7 @@ int wmain(int argc, wchar_t** argv) {
                 const uint32_t audioFrames = U32(header.data() + 72), audioFlags = U32(header.data() + 76);
                 const uint64_t audioTimestamp = U64(header.data() + 64), videoTimestamp = U64(header.data() + 40);
                 const uint32_t display = U32(header.data() + 60);
-                Check(U32(header.data()) == 0x4c334453 && U32(header.data() + 4) == 5 && U32(header.data() + 8) == 80 && !(flags & ~3u) &&
+                Check(U32(header.data()) == 0x4c334453 && U32(header.data() + 4) == 6 && U32(header.data() + 8) == 80 && !(flags & ~7u) && (flags & 6u) != 6u &&
                     lan3d::ValidDisplaySize(display >> 16, display & 0xffffu), "Malformed v5 access-unit header");
                 Check(extra <= 64u * 1024 && bytes > 1 && bytes <= 32u * 1024 * 1024, "Unbounded proxy access unit");
                 Check(audioFrames <= 4800 && !(audioFlags & ~1u), "Unbounded audio block or invalid flags");

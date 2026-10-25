@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$BinaryDir, [Parameter(Mandatory)][string]$OutputDir, [switch]$WireSink, [string]$EncodeGpu="auto")
+param([Parameter(Mandatory)][string]$BinaryDir, [Parameter(Mandatory)][string]$OutputDir, [switch]$WireSink, [switch]$Modes, [string]$EncodeGpu="auto")
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $binaryRoot = (Resolve-Path -LiteralPath $BinaryDir).Path
@@ -49,6 +49,16 @@ try {
         '--codec', 'auto', '--width', '3840', '--height', '2160', '--fps', '60', '--bitrate', '200000000', '--no-audio', '--profile',
         '--seconds', '45', '--stop-event', $senderEventName, '--recover-stream')
     $port = Wait-Ready $sender 'Listening on 127\.0\.0\.1:(\d+)' 8000
+    if ($Modes) {
+        $sink = Start-Child 'mode-sink' 'GpuPipelineProducer.exe' @('--verify-port', "$port", '--verify-modes')
+        Wait-Exit $sink 30000
+        [void]$senderStop.Set(); Wait-Exit $sender 5000
+        [void]$producerStop.Set(); Wait-Exit $producer 5000
+        $text = Read-Log $sink.Stdout
+        if ($text -notmatch 'GPU_MODE_VERIFIED transitions=5') { throw "Mode verification failed: $text" }
+        Write-Output $text
+        return
+    }
     if ($WireSink) {
         $sink = Start-Child 'wire-sink' 'GpuPipelineProducer.exe' @('--verify-port', "$port", '--wire-sink')
         Wait-Exit $sink 22000
@@ -96,7 +106,7 @@ try {
     $verifier = Start-Child 'wire-verifier' 'GpuPipelineProducer.exe' @('--verify-port', "$port")
     Wait-Exit $verifier 12000
     $verified = Read-Log $verifier.Stdout
-    if ($verified -notmatch 'GPU_WIRE_VERIFIED version=5 encoded=3840x2160 display_eye=3840x2160 keyframe=1 decoded=4') {
+    if ($verified -notmatch 'GPU_WIRE_VERIFIED version=6 encoded=3840x2160 display_eye=3840x2160 keyframe=1 decoded=4') {
         throw "Wire v5 / decoded eye aspect verification failed: $verified"
     }
     $stopWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -125,7 +135,7 @@ try {
     $steady = if ($fps.Count -gt 1) { @($fps | Select-Object -Skip 1) } else { $fps }
     $mean = if ($steady.Count) { ($steady | Measure-Object -Average).Average } else { 0 }
     $result = [pscustomobject]@{
-        Result='PASS'; Scope='Synthetic D3D12 source, production GPU sender, loopback TCP v5 and production NVDEC receiver; not game or LAN hardware acceptance';
+        Result='PASS'; Scope='Synthetic D3D12 source, production GPU sender, loopback TCP v6 and production NVDEC receiver; not game or LAN hardware acceptance';
         ProducerPid=[int]$producerPid; SenderPid=$sender.Process.Id; SourceWidth=7680; SourceHeight=2160; EncodedWidth=3840; EncodedHeight=2160;
         DisplayEyeWidth=3840; DisplayEyeHeight=2160; BitrateMbps=200; RequestedFps=60;
         FirstConnectionSenderFpsSamples=$fps; SteadySenderMeanFps=$mean; WithinOneFpsOfTarget=($mean -ge 59);

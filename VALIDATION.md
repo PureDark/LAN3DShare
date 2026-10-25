@@ -1,4 +1,18 @@
-# LAN3DShare 0.8.2 验证记录
+# LAN3DShare 0.8.3 验证记录
+
+## 0.8.3：接收端控制单眼传输（2026-10-26）
+
+媒体协议升级为 v6，两端需一起更新。F12 的模式选择由接收网络线程发送，发送线程非阻塞读取，并在下一张源画面到达时切换编码，从关键帧开始。2D 在原始 GPU SBS 上先裁左眼，再缩放、转 NV12、交给 NVENC；保留所选画质上限内的原始单眼分辨率及目标码率。单眼包使用 LeiaLeft 标记，接收端不会重复裁切；等待恢复 SBS 时也不会交织单眼。普通桌面不裁切，重连重新提交当前偏好，音频连接和采集不重启。
+
+`build-opt/test-results/receiver-mono.xml` 八项通过：MediaTransport（双向控制、片段、非法消息、截止时间、非阻塞、单眼元数据）、SessionTransport、StreamRecovery、ReceiverAutoDisplay、ViewerUiSmoke、NvEncoderMono、NvEncoderMonoCross、GpuModeEndToEnd。真实 NVIDIA 硬件测试覆盖 H.264/HEVC/AV1、BGRA/RGBA、同 GPU 和跨 GPU；7680×2160 源的左眼以 3840×2160 编码，经 NVDEC 后读回验证像素。生产 Sender 合成 GPU 回环连续五轮 SBS/左眼切换，保持 200 Mbps，逐次关键帧并正常硬解码，连接未重建。切换时编码器重新配置约 184 ms，属于切换开销；本次不作为稳态 FPS 测试。
+
+此次没有操作游戏或验证另一台电脑、真实 LeiaSR 显示器观感。采集 DLL 保持原版本；生产视频裁剪无 CPU 像素处理，读回仅用于测试及原有小尺寸预览。跨 GPU 仍先复制捕获纹理，再在编码 GPU 裁切。
+
+## 0.8.3：接收端 F12 切换（2026-10-26）
+
+接收画面窗口支持 F12 切换 3D 偏好与左眼 2D；同时覆盖原生窗口、WebView 子窗口和网页键盘事件，过滤按键重复。切换不改变全屏状态、网络连接和音频代号。关闭 3D 后立即撤销本机 weaver，SBS 由原左眼着色器按单眼显示比例渲染；普通桌面不裁切。再次启用后仅全屏 SBS 才调用交织。界面模式标签、控件隐藏策略和 VIEWER_STATE 同步更新。
+
+`ReceiverAutoDisplay` 通过：真实 D3D11 左眼像素读回、半宽 SBS 比例、普通桌面不裁切、来源变更保留 2D 选择，以及假 modern/legacy runtime 各三轮交织启停和资源释放。`ViewerUiSmoke` 通过：WebView F12、重复事件、原生 F12 和长按，全屏状态保持。证据 `build-opt/test-results/stereo-toggle.xml`。未操作游戏或验证真实 LeiaSR 显示器切换听感/观感。
 
 ## 0.8.2：公开 Release 下载备用路径（2026-10-25）
 

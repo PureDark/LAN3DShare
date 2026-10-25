@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace lan3d::media {
-// Wire v5 is H.264/HEVC/AV1, BT.709 limited-range NV12, SDR, progressive.
+// Wire v6 adds receiver mode control and explicit Leia left-eye content.
 // Each access unit includes the config so a fresh connection can start at an IDR.
 inline constexpr uint32_t MaxEncodedBytes = 32u * 1024 * 1024;
 inline constexpr uint32_t MaxSequenceHeaderBytes = 64u * 1024;
@@ -22,6 +22,7 @@ struct CodecConfig {
     uint32_t width{}, height{}, fps{}, bitrate{};
     std::vector<uint8_t> sequenceHeader;
     CodecId codec{CodecId::H264};
+    bool leftEyeOnly{}; // Encoder input crop only; wire content kind describes the result.
 };
 struct EncodedFrame {
     CodecConfig config;
