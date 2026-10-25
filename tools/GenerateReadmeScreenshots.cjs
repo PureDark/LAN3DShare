@@ -27,46 +27,60 @@ const fixture = () => ({
   contentKind:'desktop', elapsedSeconds:0,stats:'',busy:false,volumePercent:400,
   audio:{receiver:false,enabled:true,ready:true,volume:100,input:{peak:.25,rms:.1,active:true},output:{peak:.25,rms:.1,active:true}}
 });
+const scenes = [
+  {state:'idle',file:'readme-connect.png',title:'选择电脑，开始共享',subtitle:'Choose a computer. Share your 3D game.'},
+  {state:'receiving',file:'readme-receive.png',title:'收到画面，一键全屏',subtitle:'Receive the picture. Go fullscreen for 3D.'},
+  {state:'viewer',file:'readme-viewer.png',title:'自由观看，随时调节',subtitle:'Move the window. Make yourself comfortable.'}
+];
 (async () => {
   fs.mkdirSync(output,{recursive:true});
   const browser = await chromium.launch({channel:'msedge',headless:true});
   const manifest=[];
   try {
-    for(const state of ['idle','picker','quality','sending','receiving','settings','viewer']) {
-      const page=await browser.newPage({viewport:{width:1170,height:810},deviceScaleFactor:1});
+    for(const scene of scenes) {
+      const page=await browser.newPage({viewport:{width:900,height:624},deviceScaleFactor:2});
       const errors=[];page.on('pageerror',e=>errors.push(e.message));
       await page.goto(pathToFileURL(path.join(root,'src/ui/web/index.html')).href);
       await page.addStyleTag({content:'*,*::before,*::after{animation:none!important;transition:none!important}'});
-      const model=fixture();model.uiState=state;
-      if(state==='sending'||state==='receiving') {
-        model.phase=state;model.contentKind='sbs';model.selectedSource='game';model.elapsedSeconds=728;
-        model.stats='NVENC AV1 · 3840 × 2160 · 60 FPS · 200 Mbps';
+      const model=fixture();model.uiState=scene.state;model.selectedSource='game';model.contentKind='sbs';
+      if(scene.state==='receiving') {
+        model.phase='receiving';model.elapsedSeconds=728;
+        model.stats='3840 × 2160 · 60 FPS';
       }
-      if(state==='receiving'||state==='viewer') {
+      if(scene.state==='receiving'||scene.state==='viewer') {
         model.audio.receiver=true;model.audio.volume=400;
         model.audio.input={peak:.12,rms:.05,active:true};model.audio.output={peak:.48,rms:.2,active:true};
       }
-      if(state==='viewer') {
-        await page.setViewportSize({width:960,height:600});
+      if(scene.state==='viewer') {
+        await page.setViewportSize({width:900,height:563});
         Object.assign(model,{type:'viewer',mode:'viewer',peerName:'客厅电脑',kind:'sbs',fullscreen:false,fallback:false});
       }
       await page.evaluate(model=>{window.render(model);return document.fonts.ready.then(()=>{});},model);
-      if(state==='viewer') await page.mouse.move(300, 25);
-      if(state==='settings') await page.locator('#settings-gpu').selectOption('pci:0000:03:00.0');
-      assert.deepEqual(errors,[],`${state}: JavaScript errors`);
-      // Document only the quality controls; the shipped panel still has a
-      // legacy software-fallback footer that does not describe the GPU path.
-      let clip;
-      if(state==='quality') {
-        const panel=await page.locator('.qpop').boundingBox();
-        const note=await page.locator('.q-note').boundingBox();
-        clip={x:Math.floor(panel.x),y:Math.floor(panel.y),width:Math.ceil(panel.width),height:Math.floor(note.y-panel.y)};
-      }
-      await page.screenshot({path:path.join(output,`${state}.png`),...(clip?{clip}:{})});
-      manifest.push({state,file:`${state}.png`,width:clip?clip.width:state==='viewer'?960:1170,height:clip?clip.height:state==='viewer'?600:810,croppedControls:!!clip});
+      if(scene.state==='viewer') await page.mouse.move(300,25);
+      assert.deepEqual(errors,[],`${scene.state}: JavaScript errors`);
+      const picture=await page.screenshot();
       await page.close();
+      // Render a documentation canvas around the real UI; never alter production layout.
+      const height=scene.state==='viewer'?821:882;
+      const canvas=await browser.newPage({viewport:{width:1044,height},deviceScaleFactor:2});
+      await canvas.setContent(`<!doctype html><meta charset="utf-8"><style>
+        *{box-sizing:border-box}body{margin:0;padding:48px 72px 70px;background:#EEF1F6;color:#18202B;font-family:"Segoe UI","Microsoft YaHei UI",sans-serif}
+        header{height:138px}small{font-size:11px;letter-spacing:2px;color:#65718A;font-weight:600}
+        h1{font-size:27px;font-weight:600;letter-spacing:.4px;margin:14px 0 8px}
+        p{font-size:14px;color:#7C8697;margin:0}
+        .frame{width:900px;border-radius:14px;overflow:hidden;background:#F8F9FB;box-shadow:0 0 0 1px #17233812,0 24px 52px -16px #24385340}
+        img{width:900px;height:auto;display:block}
+      </style><header><small>LAN3DSHARE / LEIASR 3D SHARING</small><h1>${scene.title}</h1><p>${scene.subtitle}</p></header><div class="frame"><img src="data:image/png;base64,${picture.toString('base64')}" alt="LAN3DShare UI"></div>`);
+      await canvas.evaluate(()=>document.fonts.ready);
+      await canvas.locator('img').evaluate(img=>img.decode());
+      const frame=await canvas.locator('.frame').boundingBox();
+      assert.equal(frame.x,72);assert.equal(frame.width,900);
+      assert.ok(height-frame.y-frame.height>=70,'Preserve whitespace below the window');
+      await canvas.screenshot({path:path.join(output,scene.file)});
+      manifest.push({state:scene.state,file:scene.file,width:1044*2,height:height*2,padding:72,sampleData:true});
+      await canvas.close();
     }
     fs.writeFileSync(path.join(output,'manifest.json'),JSON.stringify({source:'src/ui/web/index.html',sampleData:true,liveSession:false,screenshots:manifest},null,2)+'\n');
-    console.log(`Generated ${manifest.length} documentation previews; no live client or network session.`);
+    console.log(`Generated ${manifest.length} framed documentation previews.`);
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

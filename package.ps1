@@ -22,6 +22,11 @@ if ($VerifyOnly) { $pairs; return }
 # Only this explicit list is packaged. Never recurse over build/package, which
 # also contains CLI utilities, tests, and fake vendor runtime fixtures.
 $documentation = @(
+    @{ source = 'docs\UPDATING.md'; destination = 'docs\UPDATING.md' },
+    @{ source = 'docs\BUILDING.md'; destination = 'docs\BUILDING.md' },
+    @{ source = 'docs\screenshots\readme-connect.png'; destination = 'docs\screenshots\readme-connect.png' },
+    @{ source = 'docs\screenshots\readme-receive.png'; destination = 'docs\screenshots\readme-receive.png' },
+    @{ source = 'docs\screenshots\readme-viewer.png'; destination = 'docs\screenshots\readme-viewer.png' },
     @{ source = 'build-opt\test-results\updater\installer-restart-tests.xml'; destination = 'validation\updater-restart-tests.xml' },
     @{ source = 'build-opt\test-results\updater\tests.xml'; destination = 'validation\updater-tests.xml' },
     @{ source = 'build-opt\test-results\updater\installer.json'; destination = 'validation\updater-install.json' },
