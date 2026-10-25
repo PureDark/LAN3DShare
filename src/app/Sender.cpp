@@ -102,7 +102,7 @@ uint32_t Number(const wchar_t* value, uint32_t maximum) {
     return static_cast<uint32_t>(result);
 }
 void Help() {
-    std::cout << "LAN3DShare Sender 0.7.9 (Windows x64)\n"
+    std::cout << "LAN3DShare Sender 0.8.0 (Windows x64)\n"
         "  --list                              List processes using LeiaSR DirectX\n"
         "  --pid PID                           Capture a selected application\n"
         "  --launch EXE [--args TEXT]           Start or reuse an application and follow its LeiaSR process\n"
@@ -364,6 +364,17 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
             throw std::runtime_error(error.empty() ? "Capture stop failed: " + std::to_string(result) : error);
         std::cout << "Capture stopped; the DLL remains loaded until the source exits.\n"; return 0;
     }
+    // Probe once before any capture/encode device exists. The optional DX12
+    // debug pass changes process-wide state and invalidates live DX12 devices.
+    // In particular, auto desktop -> LeiaSR attachment must only use this cache.
+    std::optional<lan3d::NativeGpuHooks> nativeHooks;
+    std::string nativeProbeError;
+    if (!o.noInject && !o.pattern && (o.pid || !o.launch.empty() || o.autoSource)) {
+        lan3d::NativeGpuHooks profile;
+        if (lan3d::ProbeNativeGpuHooks(profile, nativeProbeError)) nativeHooks = profile;
+        std::cout << "GPU_PROBE startup ready=" << bool(nativeHooks) << ' ' << nativeProbeError << '\n' << std::flush;
+        if (stopping()) return 0;
+    }
     lan3d::FrameBus bus;
     lan3d::GpuFrameBus gpuBus;
     bool busActive{}, gpuBusActive{};
@@ -399,15 +410,12 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
             try { Stop(); } catch (...) { std::cerr << "Capture stop NOT CONFIRMED: cleanup raised an exception\n"; }
         }
     } stopper{o, started, sourceProcess};
-    std::optional<lan3d::NativeGpuHooks> nativeHooks;
     const auto attachCapture = [&]() {
         error.clear(); result = 0;
         if (!nativeHooks) {
-            lan3d::NativeGpuHooks profile;
-            if (!lan3d::ProbeNativeGpuHooks(profile, error)) return false;
-            nativeHooks = profile;
-            std::cout << "GPU_PROBE external " << error << '\n' << std::flush;
-            error.clear();
+            // Never retry probing after streaming has created GPU devices.
+            error = nativeProbeError.empty() ? "GPU hook profile was not prepared before streaming" : nativeProbeError;
+            return false;
         }
         if (!sourceProcess || !sourceProcess.Alive()) { error = "Selected source process has exited"; return false; }
         if (!lan3d::InjectCapture(o.pid, o.capture, error, &sourceProcess.identity())) return false;

@@ -12,7 +12,7 @@
 .\LAN3DReceiver.exe --list-monitors
 .\LAN3DReceiver.exe --connect 192.168.1.20 --auto-display --peer-name '工作电脑'
 .\LAN3DReceiver.exe --connect 192.168.1.20 --monitor 1 --fullscreen
-.\LAN3DReceiver.exe --connect 192.168.1.20 --monitor 1 --runtime-dir 'F:\TitanLeiaBridge\runtime'
+.\LAN3DReceiver.exe --connect 192.168.1.20 --monitor 1 --runtime-dir 'F:\LeiaSRBridge\runtime'
 .\LAN3DReceiver.exe --connect 127.0.0.1 --preview --frames 120
 .\LAN3DReceiver.exe --connect 127.0.0.1 --preview --hidden --receive-frames 90
 .\LAN3DReceiver.exe --preview --self-test --frames 90
@@ -22,7 +22,7 @@
 
 默认 runtime 目录为 `C:\Program Files\LeiaSR\Platform\bin`。`--runtime-dir` 必须指向同一套 runtime 的完整 DLL 目录，不只是 DirectX 假 DLL，统一桌面客户端只使用本机保存的设置。DLL 搜索限制为所选目录和 Windows 系统目录，已加载 SimulatedReality/TitanLeiaRuntime 模块来源也会检查。客户端不静态链接 Leia 导入库；编译时需要原始 SDK 头文件以取得真实 C++ 布局。自动显示模式仅在全屏 SBS 时加载 runtime，失败会明确报错后还原 2D，不会把回退画面称作 3D。
 
-优先使用 `CreateDX11Weaver` / `IDX11Weaver1`。若新接口缺失或返回失败，则回退到 `PredictingDX11Weaver` 导出，使用 SDK 的 `sizeof` / `alignof` 分配原位对象，支持当前 TitanLeiaBridge 的 legacy DX11 实现。新接口的输入宽度按官方 DX11 示例传每眼宽；legacy 构造参数传 SBS 总宽。接收端只用 DX11；发送端捕获 DX11 或 DX12 与接收端渲染 API 无关。
+优先使用 `CreateDX11Weaver` / `IDX11Weaver1`。若新接口缺失或返回失败，则回退到 `PredictingDX11Weaver` 导出，使用 SDK 的 `sizeof` / `alignof` 分配原位对象，支持当前 LeiaSRBridge 的 legacy DX11 实现。新接口的输入宽度按官方 DX11 示例传每眼宽；legacy 构造参数传 SBS 总宽。接收端只用 DX11；发送端捕获 DX11 或 DX12 与接收端渲染 API 无关。
 
 `--frames N` 在已有输入后呈现 N 次退出（不是 N 个唯一网络帧）。`--receive-frames N` 在解码得到 N 个不同的源帧后退出；依据 TCP 顺序下的序号/时间戳变化去除连续重复帧，退出日志输出 `decoded_unique`、`last_sequence`、`uploaded`、`presented`。`--hidden` 允许与 `--preview` 或 `--auto-display` 搭配，用隐藏窗口做回环验证；隐藏的自动显示始终保持 2D，不会打开 Leia。最小化自动显示窗口时也会撤销交织，恢复全屏后才重新启用。`--timeout SECONDS` 默认 10 秒，无完整帧超时退出；断线或解码错误会打印错误并退出。`--self-test` 必须同时指定 `--preview`，使用隐藏窗口验证 SBS 左右顺序、sRGB 往返、输入纹理改变尺寸、窗口改变尺寸和正常退出；不加载 Leia runtime、不连接显示器服务。
 

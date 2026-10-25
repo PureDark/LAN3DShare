@@ -7,7 +7,7 @@ installed in the Leia runtime or a game's mod directory.
 
 The DLL hooks exports of the actually loaded `SimulatedRealityDirectX.dll`.
 `GetProcAddress` follows PE export forwarders, including the factory boundary
-used by TitanLeiaBridge. Factory results retain their original object identity,
+used by LeiaSRBridge. Factory results retain their original object identity,
 query interfaces and destroy operation. Virtual-base adjustments and method
 slots are derived using the public SDK headers and the compiling MSVC ABI.
 The supported interface contract is `IDX11Weaver1` / `IDX12Weaver1` /

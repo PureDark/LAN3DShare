@@ -18,7 +18,9 @@ struct NativeGpuHooks {
     std::array<NativeGpuModule, 24> modules{};
     std::array<NativeGpuSite, 96> sites{};
 };
-// Run in the sender/helper process, NEVER inside the capture target.
+// Run once in the sender/helper before ANY persistent graphics device exists,
+// NEVER inside the capture target or while capture/encoding is active.
+// Cache the result (including failure) for every later attach/retry/reconnect.
 bool ProbeNativeGpuHooks(NativeGpuHooks& hooks, std::string& error);
 // Metadata-only identity check; no device, queue, factory or swap chain creation.
 bool ReadNativeGpuModule(HMODULE module, NativeGpuModule& info);

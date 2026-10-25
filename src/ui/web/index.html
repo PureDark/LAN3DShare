@@ -587,7 +587,7 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
             <button class="ghost" id="browse-runtime">选择…</button>
           </div>
           <div class="found" id="runtime-status"><span class="dot"></span>已找到 LeiaSR 运行时</div>
-          <div class="f-help">只在全屏显示 3D 画面时使用。<br>使用 TitanLeiaBridge 时，选择它的完整运行时目录。</div>
+          <div class="f-help">只在全屏显示 3D 画面时使用。<br>使用 LeiaSRBridge 时，选择它的完整运行时目录。</div>
         </div>
         <div class="field" id="update-panel">
           <div class="f-label">程序更新<span id="update-current">当前版本 —</span></div>
@@ -598,16 +598,6 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
             <button class="btn plain" id="update-download" hidden>下载更新</button>
             <button class="btn solid" id="update-install" hidden>安装并重启</button>
           </div>
-          <details style="margin-top:12px" id="update-auth">
-            <summary class="f-help" style="cursor:pointer">GitHub 下载授权 <span id="update-auth-state"></span></summary>
-            <div class="f-help">私有仓库需首次填写访问令牌，保存在本机 Windows 凭据管理器中。选择 PureDark / LAN3DShare 仓库，仅授予 Contents 的 Read-only 权限。</div>
-            <input class="input" id="update-token" type="password" autocomplete="off" spellcheck="false" maxlength="256" placeholder="粘贴 GitHub 访问令牌" aria-label="GitHub 访问令牌" style="margin-top:8px">
-            <div class="btns" style="justify-content:flex-start;flex-wrap:wrap;margin-top:8px">
-              <button class="btn plain" id="update-token-help">创建访问令牌</button>
-              <button class="btn plain" id="update-save-token">保存授权</button>
-              <button class="btn plain" id="update-forget-token">清除授权</button>
-            </div>
-          </details>
         </div>
       </div>
       <div class="m-foot">
@@ -867,9 +857,6 @@ function renderUpdate() {
   $('#update-install').hidden = !['ready', 'installing'].includes(update.status);
   $('#update-install').disabled = busy || !isIdle();
   text('#update-install', update.status === 'installing' ? '正在准备重启…' : '安装并重启');
-  text('#update-auth-state', update.authorized ? '· 已保存' : '· 未设置');
-  for (const id of ['update-token', 'update-token-help', 'update-save-token', 'update-forget-token']) $('#' + id).disabled = busy || !isIdle();
-  $('#update-forget-token').hidden = !update.authorized;
 }
 
 function openSettings() {
@@ -893,7 +880,6 @@ function closePanel() {
   draft = null;
   settingsError = '';
   browsePending = false;
-  $('#update-token').value = '';
   draw();
 }
 
@@ -1186,12 +1172,6 @@ $('#open-logs').onclick = () => post('logs');
 $('#update-check').onclick = () => { if (!$('#update-check').disabled) post('updateCheck'); };
 $('#update-download').onclick = () => { if (!$('#update-download').disabled) post('updateDownload'); };
 $('#update-install').onclick = () => { if (!$('#update-install').disabled) post('updateInstall'); };
-$('#update-token-help').onclick = () => post('updateTokenHelp');
-$('#update-save-token').onclick = () => {
-  const token = $('#update-token').value.trim(); $('#update-token').value = '';
-  if (token) post('updateSaveToken', { token });
-};
-$('#update-forget-token').onclick = () => { $('#update-token').value = ''; post('updateForgetToken'); };
 $('#tip-toggle').onclick = () => { $('#tip').hidden = !$('#tip').hidden; };
 $('#go-full').onclick = () => post('fullscreen');
 $('#viewer-fullscreen').onclick = () => post('fullscreen');

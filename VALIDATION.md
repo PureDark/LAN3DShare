@@ -1,6 +1,18 @@
-# LAN3DShare 0.7.9 验证记录
+# LAN3DShare 0.8.0 验证记录
 
-## 0.7.9 GitHub 应用内更新（2026-10-25）
+## 0.8.0：桌面切换 LeiaSR 时断开（2026-10-25）
+
+本机连续两次发送日志在识别 `likeadragongaiden.exe` 后，以 `Shared GPU encoding failed (input quarantined): source COPY device (0x887A0007)` 退出。此前桌面 4K 跨卡 NVENC 接近 60 FPS。根因是首次热附加才调用 GPU 探测，其中 `EnableDebugLayer` 会使本进程已经创建的 D3D12 COPY 设备失效。日志中的 external 是相对游戏进程而言，探测仍在已开始编码的发送进程内执行。
+
+修复将 GPU 探测移到发送启动阶段、任何持久采集/编码设备创建之前，缓存成功或失败结果；后续热附加、切换来源和重试均只使用缓存，不在活动传输中重新探测。未改游戏采集 DLL、进程扫描线程、音视频同步或网络策略。
+
+独立回归测试：按旧顺序在已有设备后探测，7 个本进程设备均复现 `0x887A0007`；启动时先探测再创建设备，7 个设备、10 轮 COPY fence 全部正常。实际发送程序用自有等待程序作为选定来源，4K 桌面 → 第二张 RTX 5090 NVENC → 本机 NVDEC 收到 180 帧；稳定窗口约 59.99 / 59.90 FPS，仅在监听连接前探测一次。此项未注入游戏、未操作远端，不代表真实游戏从桌面切换 SBS 已重新验收。证据：`build-opt/test-results/probe-order.xml`、`probe-startup/result.json` 及双方日志。
+
+## 0.8.0：公开 Release 更新（2026-10-25）
+
+按用户要求删除 GitHub 下载授权界面、令牌读写及 Authorization 请求头，直接匿名访问公开 Release；任何非 200 响应显示访问失败和 HTTP 状态码。同步移除 README 的授权说明。本机原生更新单元检查、GuiSmoke 和当前 HTML 交互检查通过；匿名实测当前仓库返回 404，提示“访问 GitHub 失败（HTTP 404），请稍后重试”。证据：`build-opt/test-results/updater/public-tests.xml`、`ui.json`、`public-check.log`。下述私有仓库授权记录属于初始发布，不再代表当前实现。
+
+## 0.7.9 初始发布：GitHub 应用内更新（2026-10-25）
 
 设置页面提供检查、下载进度、安装并重启，以及 Windows 凭据管理器授权。仅接受正式版本和精确命名的 win64 包，拒绝降级、错误 SHA256 和不安全的解压路径；凭据仅发送给本仓库 GitHub API，不转发到资源 CDN。检查与下载在后台执行，更新期间拒绝新共享连接；已有共享不允许开始更新。
 

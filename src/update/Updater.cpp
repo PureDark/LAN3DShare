@@ -1,7 +1,6 @@
 #include "Updater.h"
 #include "Version.h"
 #include <winhttp.h>
-#include <wincred.h>
 #include <bcrypt.h>
 #include <objbase.h>
 #include <array>
@@ -15,10 +14,8 @@
 namespace lan3d::update {
 namespace {
 using Json = nlohmann::json;
-constexpr wchar_t CredentialName[] = L"LAN3DShare/GitHubRelease/PureDark/LAN3DShare";
 std::string PathText(const std::filesystem::path& p) { const auto s=p.u8string(); return std::string(s.begin(),s.end()); }
 constexpr uint64_t MaxArchive = 256ull * 1024 * 1024;
-std::wstring Wide(const std::string& s) { int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), int(s.size()), nullptr, 0); if (!n && !s.empty()) throw std::runtime_error("无效的文本编码"); std::wstring r(n, 0); MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), r.data(), n); return r; }
 struct Internet {
     HINTERNET value{};
     explicit Internet(HINTERNET v) : value(v) { if (!v) throw std::runtime_error("无法连接 GitHub，请检查网络或代理设置"); }
@@ -31,12 +28,6 @@ std::array<unsigned, 3> Version(std::string s) {
     if (!std::regex_match(s, m, std::regex(R"((0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4}))"))) throw std::runtime_error("不支持的版本号");
     return {unsigned(std::stoul(m[1])), unsigned(std::stoul(m[2])), unsigned(std::stoul(m[3]))};
 }
-std::string Token() {
-    PCREDENTIALW c{};
-    if (!CredReadW(CredentialName, CRED_TYPE_GENERIC, 0, &c)) return {};
-    std::string token(reinterpret_cast<char*>(c->CredentialBlob), c->CredentialBlobSize);
-    CredFree(c); return token;
-}
 std::wstring Quote(const std::wstring& value) {
     std::wstring out = L"\""; unsigned slashes{};
     for (const auto ch : value) {
@@ -45,14 +36,14 @@ std::wstring Quote(const std::wstring& value) {
     }
     out.append(slashes * 2, L'\\'); return out + L'"';
 }
-std::string Get(const std::wstring& initial, const std::string& token, const std::atomic<bool>& cancel,
+std::string Get(const std::wstring& initial, const std::atomic<bool>& cancel,
     uint64_t limit, const std::filesystem::path& output, const std::function<void(unsigned)>& progress = {}) {
-    Internet session(WinHttpOpen(L"LAN3DShare/" L"0.7.9", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0));
+    Internet session(WinHttpOpen(L"LAN3DShare/" LAN3D_VERSION_W, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0));
     WinHttpSetTimeouts(session.value, 5000, 5000, 5000, 5000);
     auto url = initial;
     for (unsigned redirect = 0; redirect < 5; ++redirect) {
         if (cancel) throw std::runtime_error("已取消更新操作");
-        bool authorize{}; if (!AllowedUrl(url, authorize)) throw std::runtime_error("更新下载地址不属于 GitHub");
+        if (!AllowedUrl(url)) throw std::runtime_error("更新下载地址不属于 GitHub");
         URL_COMPONENTS parts{sizeof(parts)}; parts.dwHostNameLength = parts.dwUrlPathLength = parts.dwExtraInfoLength = DWORD(-1);
         if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) throw std::runtime_error("更新下载地址无效");
         const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
@@ -64,10 +55,8 @@ std::string Get(const std::wstring& initial, const std::string& token, const std
         if (!WinHttpSetOption(request.value, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy))) throw std::runtime_error("无法设置安全下载策略");
         std::wstring headers = output.empty() ? L"Accept: application/vnd.github+json\r\n" : L"Accept: application/octet-stream\r\n";
         headers += L"X-GitHub-Api-Version: 2022-11-28\r\n";
-        // Never forward a private repository token to a signed asset/CDN URL.
-        if (authorize && !token.empty()) headers += L"Authorization: Bearer " + Wide(token) + L"\r\n";
         if (!WinHttpSendRequest(request.value, headers.c_str(), DWORD(headers.size()), nullptr, 0, 0, 0) || !WinHttpReceiveResponse(request.value, nullptr))
-            throw std::runtime_error("GitHub 请求失败，请检查网络后重试");
+            throw std::runtime_error("访问 GitHub 失败，请检查网络后重试");
         DWORD status{}, bytes = sizeof(status);
         if (!WinHttpQueryHeaders(request.value, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &bytes, nullptr)) throw std::runtime_error("无法读取 GitHub 响应");
         if (status == 301 || status == 302 || status == 307 || status == 308) {
@@ -77,9 +66,7 @@ std::string Get(const std::wstring& initial, const std::string& token, const std
             if (!WinHttpQueryHeaders(request.value, WINHTTP_QUERY_LOCATION, nullptr, location.data(), &bytes, nullptr)) throw std::runtime_error("无法读取下载地址");
             url = location.data(); continue;
         }
-        if (status == 401 || status == 404) throw std::runtime_error("无法访问私有 Release。请填写可读取 PureDark/LAN3DShare 的 GitHub 令牌，再检查更新");
-        if (status == 403 || status == 429) throw std::runtime_error("GitHub 拒绝请求或请求过于频繁，请检查令牌权限或稍后重试");
-        if (status != 200) throw std::runtime_error("GitHub 暂时无法提供更新，请稍后重试");
+        if (status != 200) throw std::runtime_error("访问 GitHub 失败（HTTP " + std::to_string(status) + "），请稍后重试");
         std::ofstream file;
         if (!output.empty()) { file.open(output, std::ios::binary | std::ios::trunc); if (!file) throw std::runtime_error("无法写入更新缓存"); }
         std::string body; std::array<char, 65536> buffer{}; uint64_t total{};
@@ -101,12 +88,11 @@ std::string Get(const std::wstring& initial, const std::string& token, const std
 }
 }
 bool Newer(const std::string& candidate, const std::string& current) { return Version(candidate) > Version(current); }
-bool AllowedUrl(const std::wstring& url, bool& authorize) {
-    authorize = false;
+bool AllowedUrl(const std::wstring& url) {
     URL_COMPONENTS p{sizeof(p)}; p.dwHostNameLength = p.dwUrlPathLength = p.dwUserNameLength = p.dwPasswordLength = DWORD(-1);
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &p) || p.nScheme != INTERNET_SCHEME_HTTPS || p.nPort != 443 || p.dwUserNameLength || p.dwPasswordLength) return false;
     const std::wstring host(p.lpszHostName, p.dwHostNameLength), path(p.lpszUrlPath, p.dwUrlPathLength);
-    if (host == L"api.github.com") { authorize = path == L"/repos/PureDark/LAN3DShare/releases" || path.starts_with(L"/repos/PureDark/LAN3DShare/releases/"); return authorize; }
+    if (host == L"api.github.com") return path == L"/repos/PureDark/LAN3DShare/releases" || path.starts_with(L"/repos/PureDark/LAN3DShare/releases/");
     return host == L"release-assets.githubusercontent.com" || host == L"objects.githubusercontent.com";
 }
 Release ParseRelease(const std::string& json) {
@@ -136,20 +122,20 @@ std::string Sha256(const std::filesystem::path& path) {
     std::array<unsigned char,32> digest{}; if (BCryptFinishHash(hash.h,digest.data(),ULONG(digest.size()),0)<0) throw std::runtime_error("文件校验失败");
     constexpr char hex[]="0123456789abcdef"; std::string out; for (auto b:digest) {out+=hex[b>>4];out+=hex[b&15];} return out;
 }
-Release FetchRelease(const std::string& token, const std::atomic<bool>& cancel) {
-    return ParseRelease(Get(L"https://api.github.com/repos/PureDark/LAN3DShare/releases/latest", token, cancel, 2*1024*1024, {}));
+Release FetchRelease(const std::atomic<bool>& cancel) {
+    return ParseRelease(Get(L"https://api.github.com/repos/PureDark/LAN3DShare/releases/latest", cancel, 2*1024*1024, {}));
 }
-void FetchArchive(const Release& r, const std::string& token, const std::filesystem::path& path, const std::atomic<bool>& cancel, const std::function<void(unsigned)>& progress) {
-    Get(L"https://api.github.com/repos/PureDark/LAN3DShare/releases/assets/"+std::to_wstring(r.assetId),token,cancel,r.size,path,progress);
+void FetchArchive(const Release& r, const std::filesystem::path& path, const std::atomic<bool>& cancel, const std::function<void(unsigned)>& progress) {
+    Get(L"https://api.github.com/repos/PureDark/LAN3DShare/releases/assets/"+std::to_wstring(r.assetId),cancel,r.size,path,progress);
     if (std::filesystem::file_size(path)!=r.size || "sha256:"+Sha256(path)!=r.digest) throw std::runtime_error("下载文件校验失败，请重新下载");
 }
-Client::Client(std::filesystem::path executable, std::filesystem::path data) : executable_(std::move(executable)), data_(std::move(data)), authorized_(!Token().empty()) {
+Client::Client(std::filesystem::path executable, std::filesystem::path data) : executable_(std::move(executable)), data_(std::move(data)) {
     std::ifstream in(data_/L"update-result.json");
     try { if(in) { Json result;in>>result; message_=result.value("message",message_); status_=result.value("ok",false)?"idle":"error"; } } catch(...) {}
 }
 Client::~Client(){cancel_=true;if(worker_.joinable())worker_.join();}
 bool Client::Busy() const {std::lock_guard lock(mutex_);return busy_;}
-Json Client::Model() const {std::lock_guard lock(mutex_);return {{"current",LAN3D_VERSION},{"latest",release_.version},{"status",status_},{"message",message_},{"progress",progress_},{"busy",busy_},{"authorized",authorized_},{"hasUpdate",!release_.version.empty() && Newer(release_.version,LAN3D_VERSION)}};}
+Json Client::Model() const {std::lock_guard lock(mutex_);return {{"current",LAN3D_VERSION},{"latest",release_.version},{"status",status_},{"message",message_},{"progress",progress_},{"busy",busy_},{"hasUpdate",!release_.version.empty() && Newer(release_.version,LAN3D_VERSION)}};}
 void Client::State(std::string status,std::string message){std::lock_guard lock(mutex_);status_=std::move(status);message_=std::move(message);}
 void Client::Start(std::string status,std::string message,std::function<void()> action){
     {std::lock_guard lock(mutex_);if(busy_)return;}
@@ -162,7 +148,7 @@ void Client::Start(std::string status,std::string message,std::function<void()> 
     }
 }
 void Client::Check(){Start("checking","正在检查 GitHub 最新版本…",[this]{
-    auto r=FetchRelease(Token(),cancel_);const bool newer=Newer(r.version,LAN3D_VERSION);
+    auto r=FetchRelease(cancel_);const bool newer=Newer(r.version,LAN3D_VERSION);
     {std::lock_guard lock(mutex_);release_=std::move(r);stage_.clear();}
     State(newer?"available":"current",newer?"发现新版本，可下载后安装":"当前已是最新版本");
 });}
@@ -173,7 +159,7 @@ void Client::Download(){
         auto stage=data_/L"updates"/name;std::filesystem::create_directories(stage);
         {std::lock_guard lock(mutex_);stage_=stage;}
         try {
-            FetchArchive(r,Token(),stage/L"package.zip",cancel_,[this](unsigned p){std::lock_guard lock(mutex_);progress_=p;});
+            FetchArchive(r,stage/L"package.zip",cancel_,[this](unsigned p){std::lock_guard lock(mutex_);progress_=p;});
         } catch (...) {
             std::error_code ignored;std::filesystem::remove(stage/L"package.zip",ignored);throw;
         }
@@ -181,14 +167,6 @@ void Client::Download(){
         State("ready","下载并校验完成，可以安装并重启");
     });
 }
-void Client::SaveToken(const std::string& token){
-    if(Busy())return;
-    if(token.size()<20||token.size()>256||!std::all_of(token.begin(),token.end(),[](unsigned char c){return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_';})) {State("error","请填写有效的 GitHub 访问令牌");return;}
-    CREDENTIALW c{};c.Type=CRED_TYPE_GENERIC;c.TargetName=const_cast<wchar_t*>(CredentialName);c.CredentialBlobSize=DWORD(token.size());c.CredentialBlob=reinterpret_cast<LPBYTE>(const_cast<char*>(token.data()));c.Persist=CRED_PERSIST_LOCAL_MACHINE;c.UserName=const_cast<wchar_t*>(L"GitHub");
-    if(!CredWriteW(&c,0)){State("error","无法保存到 Windows 凭据管理器");return;}
-    {std::lock_guard lock(mutex_);authorized_=true;}State("idle","GitHub 凭据已保存，可以检查更新");
-}
-void Client::ForgetToken(){if(Busy())return;if(!CredDeleteW(CredentialName,CRED_TYPE_GENERIC,0)&&GetLastError()!=ERROR_NOT_FOUND){State("error","无法清除 GitHub 凭据");return;}{std::lock_guard lock(mutex_);authorized_=false;}State("idle","GitHub 凭据已清除");}
 bool Client::TakeExitRequest(){std::lock_guard lock(mutex_);return std::exchange(exit_,false);}
 void Client::Install(){
     Release r;std::filesystem::path stage;

@@ -16,7 +16,7 @@
 2. **发送方选择游戏和对方电脑。**先在游戏中开启 LeiaSR，再点击 **连接并发送**。
 3. **接收方全屏观看 3D。**画面会自动打开；按 **F11** 或双击画面进入全屏。窗口模式显示 2D 预览。
 
-需要 Windows 电脑和支持编解码的 NVIDIA 显卡。想在两边都看 3D，两边都需要 LeiaSR 显示器及运行环境。也支持兼容的 TitanLeiaBridge；仅分享普通画面时不需要 LeiaSR。
+需要 Windows 电脑和支持编解码的 NVIDIA 显卡。想在两边都看 3D，两边都需要 LeiaSR 显示器及运行环境。也支持兼容的 LeiaSRBridge；仅分享普通画面时不需要 LeiaSR。
 
 ## 界面预览
 
@@ -32,7 +32,7 @@
 
 ## 更新
 
-在 **设置 → 程序更新** 中检查、下载，然后点击 **安装并重启**。旧版需先手动升级到 0.7.9 一次；私有仓库首次使用需要 [配置 GitHub 下载授权](docs/UPDATING.md)。
+在 **设置 → 程序更新** 中检查、下载，然后点击 **安装并重启**。没有更新入口的旧版需先手动升级一次。无需登录或授权，访问失败会直接提示。[更新说明](docs/UPDATING.md)
 
 <a id="english"></a>
 ## English
@@ -43,9 +43,9 @@
 2. Enable LeiaSR in the game. On the sender, select the game and the other PC, then click **连接并发送 / Connect and send**.
 3. The receiver opens the picture automatically. Press **F11** or double-click for 3D fullscreen; windowed mode shows a 2D preview.
 
-Requires Windows and NVIDIA GPUs supporting video encoding/decoding. To watch in 3D on both PCs, each needs a LeiaSR display and runtime. Compatible TitanLeiaBridge setups are supported. LeiaSR is optional for ordinary 2D sharing.
+Requires Windows and NVIDIA GPUs supporting video encoding/decoding. To watch in 3D on both PCs, each needs a LeiaSR display and runtime. Compatible LeiaSRBridge setups are supported. LeiaSR is optional for ordinary 2D sharing.
 
-**Updates:** use **Settings → Program update → Check → Download → Install and restart**. Older clients need one manual upgrade to 0.7.9. Private-repository access requires [one-time GitHub authorization](docs/UPDATING.md).
+**Updates:** use **Settings → Program update → Check → Download → Install and restart**. Clients without an update button need one manual upgrade. No sign-in or token is needed; failed requests show an error. [Update guide](docs/UPDATING.md).
 
 ---
 

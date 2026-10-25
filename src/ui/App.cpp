@@ -55,7 +55,7 @@ std::wstring ChoosePath(HWND owner, bool directory) {
     ComPtr<IFileOpenDialog> dialog;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) return {};
     DWORD flags{}; dialog->GetOptions(&flags); dialog->SetOptions(flags | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | (directory ? FOS_PICKFOLDERS : FOS_FILEMUSTEXIST));
-    dialog->SetTitle(directory ? L"选择 LeiaSR 或 TitanLeiaBridge 的完整 runtime 目录" : L"选择要共享的 3D 程序");
+    dialog->SetTitle(directory ? L"选择 LeiaSR 或 LeiaSRBridge 的完整 runtime 目录" : L"选择要共享的 3D 程序");
     COMDLG_FILTERSPEC filter{L"Windows 程序", L"*.exe"}; if (!directory) dialog->SetFileTypes(1, &filter);
     if (FAILED(dialog->Show(owner))) return {};
     ComPtr<IShellItem> item; PWSTR path{};
@@ -206,7 +206,7 @@ struct App {
             {"elapsedSeconds", phase == Phase::Sending || phase == Phase::Receiving ? std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - phaseTime).count() : 0},
             {"stats", videoRecovering ? (phase == Phase::Sending && settings.rate != 0 ? "正在恢复视频连接；码率过高时请降低或选择自动" : "网络暂时拥塞，正在恢复画面…") : Utf8(encodingSummary)},
             {"maximized", IsZoomed(window) != FALSE}, {"sources", Json::array()}, {"peers", Json::array()}, {"monitors", Json::array()}};
-        m["update"] = updater ? updater->Model() : Json{{"current", LAN3D_VERSION}, {"status", "idle"}, {"message", "检查 GitHub 最新版本"}, {"busy", false}, {"authorized", false}};
+        m["update"] = updater ? updater->Model() : Json{{"current", LAN3D_VERSION}, {"status", "idle"}, {"message", "检查 GitHub 最新版本"}, {"busy", false}};
         m["gpus"] = Json::array();
         for (const auto& gpu : media::EncodeAdapters()) m["gpus"].push_back({{"id", gpu.id}, {"name", "GPU " + std::to_string(gpu.index) + " · " + Utf8(gpu.name) + (gpu.id.starts_with("pci:") ? "（PCI " + gpu.id.substr(4) + "）" : "（PCI 地址不可用）")}});
         for (size_t i = 0; i < displays.size(); ++i) m["monitors"].push_back({{"id", i}, {"name", Utf8(displays[i].name)}, {"width", displays[i].width}, {"height", displays[i].height}});
@@ -282,9 +282,6 @@ struct App {
                 if (action == "updateCheck") updater->Check();
                 else if (action == "updateDownload") updater->Download();
                 else if (action == "updateInstall") updater->Install();
-                else if (action == "updateSaveToken") updater->SaveToken(j.value("token", std::string{}));
-                else if (action == "updateForgetToken") updater->ForgetToken();
-                else if (action == "updateTokenHelp") ShellExecuteW(window, L"open", L"https://github.com/settings/personal-access-tokens/new?name=LAN3DShare%20Updates&target_name=PureDark&contents=read", nullptr, nullptr, SW_SHOWNORMAL);
                 updateReserved = updater->Busy();
                 if (updateReserved) service.SetState(session::State::Busy);
                 Publish(); return;
