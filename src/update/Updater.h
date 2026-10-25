@@ -16,6 +16,7 @@ struct Release {
 bool Newer(const std::string& candidate, const std::string& current);
 Release ParseRelease(const std::string& json);
 bool AllowedUrl(const std::wstring& url);
+std::wstring ArchiveUrl(const Release& release);
 std::string Sha256(const std::filesystem::path& file);
 Release FetchRelease(const std::atomic<bool>& cancel);
 void FetchArchive(const Release& release, const std::filesystem::path& file,

@@ -8,7 +8,11 @@
 
 ![程序更新](screenshots/updater.png)
 
+从 0.8.2 起，下载优先使用公开 Release 直链，失败后尝试 API 下载。旧版若能检查更新但下载返回 403，可从 [GitHub Release](https://github.com/PureDark/LAN3DShare/releases/latest) 手动下载完整包升级一次。
+
 ## English
+
+Version 0.8.2 prefers public Release downloads and retries through the asset API if needed. If an older client gets HTTP 403 while downloading, manually install the complete package from [GitHub Releases](https://github.com/PureDark/LAN3DShare/releases/latest) once.
 
 Use **Settings → Program update → Check → Download → Install and restart**. The app accesses public GitHub Releases directly, without sign-in or tokens. Failed requests show an error and can be retried later.
 

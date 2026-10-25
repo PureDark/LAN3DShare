@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 #include <fstream>
+#include <iostream>
 #include <regex>
 #include <stdexcept>
 #include <vector>
@@ -54,7 +55,8 @@ std::string Get(const std::wstring& initial, const std::atomic<bool>& cancel,
         DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
         if (!WinHttpSetOption(request.value, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy))) throw std::runtime_error("无法设置安全下载策略");
         std::wstring headers = output.empty() ? L"Accept: application/vnd.github+json\r\n" : L"Accept: application/octet-stream\r\n";
-        headers += L"X-GitHub-Api-Version: 2022-11-28\r\n";
+        if (host == L"api.github.com") headers += L"X-GitHub-Api-Version: 2022-11-28\r\n";
+        headers += L"Cache-Control: no-cache\r\nPragma: no-cache\r\n";
         if (!WinHttpSendRequest(request.value, headers.c_str(), DWORD(headers.size()), nullptr, 0, 0, 0) || !WinHttpReceiveResponse(request.value, nullptr))
             throw std::runtime_error("访问 GitHub 失败，请检查网络后重试");
         DWORD status{}, bytes = sizeof(status);
@@ -66,7 +68,15 @@ std::string Get(const std::wstring& initial, const std::atomic<bool>& cancel,
             if (!WinHttpQueryHeaders(request.value, WINHTTP_QUERY_LOCATION, nullptr, location.data(), &bytes, nullptr)) throw std::runtime_error("无法读取下载地址");
             url = location.data(); continue;
         }
-        if (status != 200) throw std::runtime_error("访问 GitHub 失败（HTTP " + std::to_string(status) + "），请稍后重试");
+        if (status != 200) {
+            wchar_t remaining[64]{}; bytes = sizeof(remaining);
+            const bool limited = host == L"api.github.com" &&
+                WinHttpQueryHeaders(request.value, WINHTTP_QUERY_CUSTOM, L"X-RateLimit-Remaining", remaining, &bytes, nullptr) &&
+                std::wstring(remaining) == L"0";
+            const auto where = std::string(host.begin(), host.end());
+            throw std::runtime_error((limited ? std::string("GitHub 接口请求次数已用尽，请稍后重试") : std::string("访问 GitHub 失败")) +
+                "（" + where + "，HTTP " + std::to_string(status) + "）");
+        }
         std::ofstream file;
         if (!output.empty()) { file.open(output, std::ios::binary | std::ios::trunc); if (!file) throw std::runtime_error("无法写入更新缓存"); }
         std::string body; std::array<char, 65536> buffer{}; uint64_t total{};
@@ -93,7 +103,14 @@ bool AllowedUrl(const std::wstring& url) {
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &p) || p.nScheme != INTERNET_SCHEME_HTTPS || p.nPort != 443 || p.dwUserNameLength || p.dwPasswordLength) return false;
     const std::wstring host(p.lpszHostName, p.dwHostNameLength), path(p.lpszUrlPath, p.dwUrlPathLength);
     if (host == L"api.github.com") return path == L"/repos/PureDark/LAN3DShare/releases" || path.starts_with(L"/repos/PureDark/LAN3DShare/releases/");
+    if (host == L"github.com") return std::regex_match(path, std::wregex(
+        LR"(/PureDark/LAN3DShare/releases/download/v([0-9]+\.[0-9]+\.[0-9]+)/LAN3DShare-\1-win64\.zip)"));
     return host == L"release-assets.githubusercontent.com" || host == L"objects.githubusercontent.com";
+}
+std::wstring ArchiveUrl(const Release& release) {
+    const auto v = Version(release.version);
+    const auto version = std::to_wstring(v[0]) + L"." + std::to_wstring(v[1]) + L"." + std::to_wstring(v[2]);
+    return L"https://github.com/PureDark/LAN3DShare/releases/download/v" + version + L"/LAN3DShare-" + version + L"-win64.zip";
 }
 Release ParseRelease(const std::string& json) {
     auto j = Json::parse(json);
@@ -126,8 +143,24 @@ Release FetchRelease(const std::atomic<bool>& cancel) {
     return ParseRelease(Get(L"https://api.github.com/repos/PureDark/LAN3DShare/releases/latest", cancel, 2*1024*1024, {}));
 }
 void FetchArchive(const Release& r, const std::filesystem::path& path, const std::atomic<bool>& cancel, const std::function<void(unsigned)>& progress) {
-    Get(L"https://api.github.com/repos/PureDark/LAN3DShare/releases/assets/"+std::to_wstring(r.assetId),cancel,r.size,path,progress);
-    if (std::filesystem::file_size(path)!=r.size || "sha256:"+Sha256(path)!=r.digest) throw std::runtime_error("下载文件校验失败，请重新下载");
+    const std::array urls{ArchiveUrl(r), L"https://api.github.com/repos/PureDark/LAN3DShare/releases/assets/"+std::to_wstring(r.assetId)};
+    std::string firstError;
+    for (size_t i = 0; i < urls.size(); ++i) {
+        if (cancel) throw std::runtime_error("已取消更新操作");
+        try {
+            std::cout << "UPDATE_DOWNLOAD route=" << (i ? "api" : "public") << '\n';
+            if (progress) progress(0);
+            Get(urls[i],cancel,r.size,path,progress);
+            if (std::filesystem::file_size(path)!=r.size || "sha256:"+Sha256(path)!=r.digest)
+                throw std::runtime_error("下载文件校验失败，请重新下载");
+            return;
+        } catch (const std::exception& error) {
+            std::error_code ignored; std::filesystem::remove(path, ignored);
+            if (cancel) throw;
+            if (!i) firstError = error.what();
+            else throw std::runtime_error("公开下载地址：" + firstError + "；备用下载地址：" + error.what());
+        }
+    }
 }
 Client::Client(std::filesystem::path executable, std::filesystem::path data) : executable_(std::move(executable)), data_(std::move(data)) {
     std::ifstream in(data_/L"update-result.json");
