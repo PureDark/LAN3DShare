@@ -55,13 +55,13 @@ void GenerationsAndSuspend() {
     auto reset = scheduler.Plan(960, 960, 1100000);
     Require(reset.resetEndpoint && reset.audio.samples.empty(), "old connection survived reset");
     Require(scheduler.Stats().staleBlocks == 1, "stale generation was not counted");
-    scheduler.Push(Silence(20000000, 960), 8); scheduler.Presented(20200000, 8, 1200000);
+    scheduler.Push(Silence(20000000, 1920), 8); scheduler.Presented(20400000, 8, 1200000);
     Require(scheduler.Plan(0, 960, 1200000).audio.Frames() == 960, "new generation did not resume");
     scheduler.Suspend(); scheduler.Suspend();
-    scheduler.Push(Silence(20200000, 960), 8);
-    scheduler.Presented(20200000, 8, 1300000);
+    scheduler.Push(Silence(20400000, 1920), 8);
+    scheduler.Presented(20400000, 8, 1300000);
     Require(scheduler.Plan(960, 960, 1300000).audio.samples.empty(), "suspend resumed on stale picture");
-    scheduler.Presented(20400000, 8, 1400000);
+    scheduler.Presented(20800000, 8, 1400000);
     Require(!scheduler.Plan(0, 960, 1400000).audio.samples.empty(), "fresh picture failed to leave suspend");
 }
 void RollbackAndBounds() {
@@ -73,10 +73,10 @@ void RollbackAndBounds() {
     scheduler.Presented(100000000, 1, 1100000);
     auto rollback = scheduler.Plan(960, 960, 1100000);
     Require(rollback.resetEndpoint && rollback.audio.samples.empty(), "clock rollback replayed stale audio");
-    scheduler.Push(Silence(100000000, 960), 1); scheduler.Presented(100200000, 1, 1200000);
+    scheduler.Push(Silence(100000000, 1920), 1); scheduler.Presented(100400000, 1, 1200000);
     auto fresh = scheduler.Plan(0, 960, 1200000);
-    Require(!fresh.audio.samples.empty() && fresh.audio.End100ns() <= 100200000, "clock rollback failed to reanchor");
-    scheduler.Push(Silence(100200000, 960, true), 1); scheduler.Presented(100400000, 1, 1300000);
+    Require(!fresh.audio.samples.empty() && fresh.audio.End100ns() <= 100400000, "clock rollback failed to reanchor");
+    scheduler.Push(Silence(100400000, 1920, true), 1); scheduler.Presented(100800000, 1, 1300000);
     Require(scheduler.Plan(960, 960, 1300000).resetEndpoint, "capture discontinuity retained endpoint queue");
 }
 void TimestampBoundary() {
@@ -116,14 +116,49 @@ void LongContinuity() {
         Require(plan.audio.samples.empty() || plan.audio.End100ns() <= video, "continuous sound crossed presented PTS");
     }
     const auto stats = scheduler.Stats();
-    Require(stats.acceptedFrames == 480000 && released >= 478000 && released <= 480000,
+    Require(stats.acceptedFrames == 480000 && released >= 477600 && released <= 480000,
         "10 second continuity lost or duplicated more than the allowed startup tail");
     Require(stats.resets == 1 && stats.stalls == 0 && stats.reanchors == 0,
         "steady 60 FPS caused repeated endpoint resets");
 }
+void JitterAndDeferredReset() {
+    PlaybackScheduler scheduler; scheduler.Reset(1);
+    constexpr uint64_t origin = 100000000;
+    uint32_t padding{}; bool playing{}; unsigned dry{};
+    for (uint64_t now = 0; now <= 50000000; now += 10000) {
+        if (playing && padding < 48) ++dry;
+        padding = padding > 48 ? padding - 48 : 0;
+        if (now && now % 100000 == 0) scheduler.Push(Silence(origin + now - 100000, 480), 1);
+        // A 20 ms decode/presentation hitch once per second, with a fresh
+        // texture after it. It must not cause a hard reset or a dry endpoint.
+        if (now % UnitsPerSecond < 5000000 || now % UnitsPerSecond >= 5200000)
+            scheduler.Presented(origin + (now * 60 / UnitsPerSecond) * UnitsPerSecond / 60, 1, origin + now);
+        auto plan = scheduler.Plan(padding, 960 - padding, origin + now, true);
+        if (plan.resetEndpoint) padding = 0;
+        padding += plan.audio.Frames(); playing |= !plan.audio.samples.empty();
+        Require(plan.audio.samples.empty() || plan.audio.End100ns() <= origin + now, "jitter played future audio");
+    }
+    std::cout << "jitter dry=" << dry << " resets=" << scheduler.Stats().resets << '\n';
+    Require(dry == 0 && scheduler.Stats().resets == 1, "short video hitches interrupted buffered audio");
+    scheduler.Push(Silence(origin + 50000000, 1920, true), 1);
+    scheduler.Presented(origin + 50400000, 1, origin + 50400000);
+    const auto before = scheduler.Stats().queuedFrames;
+    const auto reset = scheduler.Plan(480, 480, origin + 50400000, true);
+    Require(reset.resetEndpoint && (reset.resetReasons & SourceDiscontinuity) && reset.audio.samples.empty() &&
+        scheduler.Stats().queuedFrames == before, "fade/drain consumed new source samples prematurely");
+    Require(!scheduler.Plan(0, 960, origin + 50500000, true).audio.samples.empty(), "fade completion failed to resume");
+    scheduler.Reset(2);
+    scheduler.Push(Silence(origin, 240), 2); // A 5 ms click, then no more capture packets.
+    uint32_t shortFrames{};
+    for (uint64_t now = 100000; now <= 600000; now += 100000) {
+        scheduler.Presented(origin + now, 2, origin + now);
+        shortFrames += scheduler.Plan(0, 960, origin + now, true).audio.Frames();
+    }
+    Require(shortFrames == 240, "prebuffer swallowed a short sound followed by silence");
+}
 }
 int main() {
-    try { NormalAndStall(); GenerationsAndSuspend(); RollbackAndBounds(); TimestampBoundary(); LongContinuity(); }
+    try { NormalAndStall(); GenerationsAndSuspend(); RollbackAndBounds(); TimestampBoundary(); LongContinuity(); JitterAndDeferredReset(); }
     catch (const std::exception& error) { std::cerr << "AudioScheduler: " << error.what() << '\n'; return 1; }
     std::cout << "AudioScheduler: 60fps, frozen redraws, jump, reconnect, rollback, discontinuity and bounds passed\n";
 }

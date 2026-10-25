@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <iostream>
 
 using Microsoft::WRL::ComPtr;
 namespace lan3d::media {
@@ -385,7 +386,18 @@ bool Decoder::Configure(const CodecConfig& config, std::string& error) {
     if (p.preferHardware || config.codec != CodecId::H264) {
         auto decoder = std::make_unique<NvDecoder>(p.gpuOutput ? &p.outputAdapter : nullptr);
         if (decoder->Configure(config, error)) { p.nv = std::move(decoder); return true; }
-        if (config.codec != CodecId::H264 || p.gpuOutput) return false;
+        const auto directError = error;
+        // A display on a different/unsupported adapter must not force software
+        // decoding while another NVIDIA GPU can decode the selected format.
+        if (p.gpuOutput) {
+            decoder = std::make_unique<NvDecoder>();
+            if (decoder->Configure(config, error)) {
+                std::cout << "DECODER_FALLBACK NVDEC alternate GPU with readback; direct output unavailable: " << directError << '\n';
+                p.nv = std::move(decoder); return true;
+            }
+        }
+        if (config.codec != CodecId::H264) return false;
+        std::cout << "DECODER_FALLBACK Software H.264; hardware unavailable: " << error << '\n';
         error.clear(); // H.264 retains the Windows software fallback.
     }
     if (FAILED(p.runtime.mf)) return Fail(error, "Media Foundation startup", p.runtime.mf);

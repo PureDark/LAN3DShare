@@ -26,6 +26,7 @@ public:
         return frames;
     }
     uint64_t End() const { return blocks_.empty() ? 0 : blocks_.back().block.End100ns(); }
+    uint64_t Begin() const { return blocks_.empty() ? 0 : blocks_.front().Timestamp(); }
     uint64_t Push(const Block& block, uint32_t capacityFrames) {
         blocks_.push_back({block, 0});
         uint64_t dropped{};

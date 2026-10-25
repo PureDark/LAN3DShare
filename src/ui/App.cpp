@@ -121,7 +121,7 @@ std::string Preview(const Frame& f) {
     return ImageDataUri(image);
 }
 struct Settings {
-    std::string id, resolution{"4k"}, gpu{"auto"};
+    std::string id, resolution{"4k"}, gpu{"auto"}, codec{"auto"};
     std::wstring name, runtime{L"C:\\Program Files\\LeiaSR\\Platform\\bin"};
     int monitor{}, fps{60}, rate{200}, receiverVolumePercent{100}; std::filesystem::path file;
     void Load(const std::filesystem::path& directory) {
@@ -131,6 +131,8 @@ struct Settings {
         GetPrivateProfileStringW(L"Client", L"Id", L"", buffer, DWORD(std::size(buffer)), file.c_str()); id = Utf8(buffer); if (id.size() != 36) id = Guid();
         GetPrivateProfileStringW(L"Client", L"Runtime", runtime.c_str(), buffer, DWORD(std::size(buffer)), file.c_str()); runtime = buffer;
         GetPrivateProfileStringW(L"Client", L"EncodeGpu", L"auto", buffer, DWORD(std::size(buffer)), file.c_str()); gpu = Utf8(buffer);
+        GetPrivateProfileStringW(L"Client", L"Codec", L"auto", buffer, DWORD(std::size(buffer)), file.c_str()); codec = Utf8(buffer);
+        if (codec != "auto" && codec != "av1" && codec != "h264" && codec != "hevc") codec = "auto";
         monitor = int(GetPrivateProfileIntW(L"Client", L"Monitor", 0, file.c_str()));
         const int old = int(GetPrivateProfileIntW(L"Client", L"Quality", 0, file.c_str()));
         resolution = old == 1 ? "1080p" : "4k"; fps = old == 1 ? 30 : 60; rate = old == 1 ? 20 : old == 2 ? 100 : old == 3 ? 400 : 200;
@@ -150,6 +152,7 @@ struct Settings {
         write(L"EncodeGpu", Wide(gpu)); write(L"Name", name); write(L"Id", Wide(id)); write(L"Runtime", runtime);
         write(L"Monitor", std::to_wstring(monitor)); write(L"Resolution", Wide(resolution));
         write(L"FPS", std::to_wstring(fps)); write(L"BitrateMbps", std::to_wstring(rate));
+        write(L"Codec", Wide(codec));
         write(L"ReceiverVolumePercent", std::to_wstring(receiverVolumePercent));
         return ok;
     }
@@ -199,7 +202,7 @@ struct App {
         Json m{{"type", "state"}, {"phase", phases[int(phase)]}, {"localName", Utf8(settings.name)}, {"networkReady", networkReady},
             {"note", Utf8(note)},
             {"sourceNotice", Utf8(phase == Phase::Sending ? sourceNotice : L"")},
-            {"selectedSource", selectedSource}, {"selectedPeer", selectedPeer}, {"quality", {{"res", settings.resolution}, {"fps", settings.fps}, {"rate", settings.rate}}},
+            {"selectedSource", selectedSource}, {"selectedPeer", selectedPeer}, {"quality", {{"res", settings.resolution}, {"fps", settings.fps}, {"rate", settings.rate}, {"codec", settings.codec}}},
             {"settings", {{"name", Utf8(settings.name)}, {"monitor", settings.monitor}, {"gpu", settings.gpu}, {"runtime", Utf8(settings.runtime)}, {"runtimeFound", RuntimeFound(settings.runtime)}}},
             {"volumePercent", settings.receiverVolumePercent},
             {"peer", {{"name", current.name}, {"address", current.address}}}, {"busy", phase != Phase::Idle || closing}, {"contentKind", contentKind},
@@ -314,8 +317,9 @@ struct App {
                     auto path = ChoosePath(window, false); if (!path.empty()) { selectedSource = "program:" + Guid(); sources.push_back({Source::Program, selectedSource, std::filesystem::path(path).filename().wstring(), path}); preview.clear(); }
                 } else if (action == "quality") {
                     auto res = j.value("res", settings.resolution); int fps = j.value("fps", settings.fps), rate = j.value("rate", settings.rate);
-                    if ((res == "720p" || res == "1080p" || res == "2k" || res == "4k") && (fps == 30 || fps == 60 || fps == 90 || fps == 120) && rate >= 0 && rate <= 1000) {
-                        settings.resolution = res; settings.fps = fps; settings.rate = rate == 0 ? 0 : std::max(20, rate);
+                    const auto codec = j.value("codec", settings.codec);
+                    if ((codec == "auto" || codec == "av1" || codec == "h264" || codec == "hevc") && (res == "720p" || res == "1080p" || res == "2k" || res == "4k") && (fps == 30 || fps == 60 || fps == 90 || fps == 120) && rate >= 0 && rate <= 1000) {
+                        settings.resolution = res; settings.fps = fps; settings.rate = rate == 0 ? 0 : std::max(20, rate); settings.codec = codec;
                         if (!settings.Save()) SetNote(L"画质已应用，但无法保存到设置文件。");
                     }
                 } else if (action == "browseRuntime") {
@@ -404,7 +408,7 @@ struct App {
         if (!testRole.empty()) args.insert(args.end(), {L"--width", L"640", L"--height", L"360", L"--fps", L"10", L"--bitrate", L"12000000", L"--codec", L"h264"});
         else {
             const int width = settings.resolution == "720p" ? 1280 : settings.resolution == "1080p" ? 1920 : settings.resolution == "2k" ? 2560 : 3840;
-            args.insert(args.end(), {L"--width", std::to_wstring(width), L"--height", std::to_wstring(width * 9 / 16), L"--fps", std::to_wstring(settings.fps), L"--bitrate", std::to_wstring(settings.rate * 1000000), L"--codec", L"auto"});
+            args.insert(args.end(), {L"--width", std::to_wstring(width), L"--height", std::to_wstring(width * 9 / 16), L"--fps", std::to_wstring(settings.fps), L"--bitrate", std::to_wstring(settings.rate * 1000000), L"--codec", Wide(settings.codec)});
         }
         if (input.kind == Source::Pattern) {
             args.insert(args.end(), {L"--test-pattern", L"--source-width", L"1280", L"--source-height", L"720"});

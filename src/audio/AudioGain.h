@@ -29,7 +29,21 @@ public:
     // A short underflow must not undo the user's already established gain.
     void Restart() {
         ring_ = {}; peaks_ = {}; written_ = 0;
-        limiter_ = 1; current_ = 0;
+        limiter_ = 1; current_ = 0; lastOutput_ = {}; bridge_ = {};
+    }
+    void JoinDiscontinuity() {
+        const auto previous = lastOutput_; Restart(); bridge_ = previous;
+    }
+    // Append only while previous output is still queued. This synthetic 2 ms
+    // tail reaches zero without replaying source audio beyond the video gate.
+    Block FadeOut() {
+        Block tail; tail.samples.resize(LookaheadFrames * Channels);
+        for (unsigned f = 0; f < LookaheadFrames; ++f)
+            for (unsigned ch = 0; ch < Channels; ++ch)
+                tail.samples[f * Channels + ch] = int16_t(std::lround(
+                    lastOutput_[ch] * double(LookaheadFrames - f - 1) / LookaheadFrames));
+        Restart();
+        return tail;
     }
     void Apply(Block& block) {
         if (block.samples.empty()) return;
@@ -46,7 +60,11 @@ public:
             if (volumeRamp_) { volume_ += (requested - volume_) / volumeRamp_; --volumeRamp_; }
             else volume_ = requested;
             if (n < DelayFrames) {
-                for (unsigned ch = 0; ch < Channels; ++ch) block.samples[frame * Channels + ch] = 0;
+                for (unsigned ch = 0; ch < Channels; ++ch) {
+                    block.samples[frame * Channels + ch] = int16_t(std::lround(
+                        bridge_[ch] * double(DelayFrames - n - 1) / DelayFrames));
+                    lastOutput_[ch] = block.samples[frame * Channels + ch];
+                }
                 continue;
             }
             const auto out = n - DelayFrames;
@@ -61,9 +79,11 @@ public:
             if (limiter_ < 0.999999) ++limitedFrames_;
             const double fade = std::min(1.0, double(out + 1) / LookaheadFrames);
             current_ = volume_ * limiter_ * fade;
-            for (unsigned ch = 0; ch < Channels; ++ch)
+            for (unsigned ch = 0; ch < Channels; ++ch) {
                 block.samples[frame * Channels + ch] = int16_t(std::clamp(
                     std::lround(At(out)[ch] * current_), -long(PeakLimit), long(PeakLimit)));
+                lastOutput_[ch] = block.samples[frame * Channels + ch];
+            }
         }
     }
     double Current() const { return current_; }
@@ -99,6 +119,7 @@ private:
     unsigned percent_, volumeRamp_{};
     double volume_{}, limiter_{1}, current_{};
     std::array<Stereo, Capacity> ring_{};
+    Stereo lastOutput_{}, bridge_{};
     std::array<double, Capacity> peaks_{};
     uint64_t written_{}, limitedFrames_{}, repairedSamples_{};
 };

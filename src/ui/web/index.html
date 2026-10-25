@@ -546,6 +546,15 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
       </div>
     </div>
     <div class="q-sec">
+      <div class="q-row">传输格式<span>接收端优先硬件解码</span></div>
+      <div class="seg" data-key="codec">
+        <button data-v="auto">自动</button>
+        <button data-v="av1">AV1</button>
+        <button data-v="h264">H.264</button>
+        <button data-v="hevc">HEVC</button>
+      </div>
+    </div>
+    <div class="q-sec">
       <div class="q-row">码率<span id="rate-value">200 Mbps</span></div>
       <div class="rate-control"><input id="rate-slider" type="range" min="0" max="1000" step="1" value="200" aria-label="码率，0 为自动" aria-valuetext="200 Mbps"><div class="rate-ticks" aria-hidden="true"><i style="left:10%" title="100 Mbps"></i><i style="left:20%" title="200 Mbps"></i><i style="left:30%" title="300 Mbps"></i><i style="left:40%" title="400 Mbps"></i><i style="left:50%" title="500 Mbps"></i><i style="left:60%" title="600 Mbps"></i><i style="left:70%" title="700 Mbps"></i><i style="left:80%" title="800 Mbps"></i><i style="left:90%" title="900 Mbps"></i><i style="left:100%" title="1000 Mbps"></i></div></div>
       <div class="q-hint">
@@ -555,7 +564,7 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
     </div>
     <div class="q-note">
       <svg class="i sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.01"/></svg>
-      <span>两台电脑没有共同的硬件编解码时，自动降为 1080p · 30 FPS · 20 Mbps 的软件 H.264。</span>
+      <span>自动优先选择双方支持的硬件格式；没有可用硬件解码时回退为 H.264。手动选择的格式不受支持时会提示。</span>
     </div>
   </div>
 
@@ -652,7 +661,8 @@ const icons = {
 const ic3d = '<svg class="i sm" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>';
 const scene = (dx, fit) => `<svg viewBox="0 0 160 90" preserveAspectRatio="${fit}"><use href="#sky"/><use href="#far" x="${dx * .4}"/><use href="#near" x="${dx}"/></svg>`;
 const pattern = (dx, fit) => `<svg viewBox="0 0 160 90" preserveAspectRatio="${fit}"><use href="#grid"/><use href="#target" x="${dx}"/></svg>`;
-const qualityDefault = { res: '4k', fps: 60, rate: 200 };
+const qualityDefault = { res: '4k', fps: 60, rate: 200, codec: 'auto' };
+const codecLabels = { auto: '自动', av1: 'AV1', h264: 'H.264', hevc: 'HEVC' };
 const resolutionLabels = { '720p': '720p', '1080p': '1080p', '2k': '2K', '4k': '4K' };
 const rateHints = {
   20: '省流量，普通 Wi-Fi 也能流畅',
@@ -782,7 +792,7 @@ function renderQuality() {
   const quality = model.quality || qualityDefault;
   const rate = Number(quality.rate) || 0;
   const rateLabel = rate === 0 ? '自动' : `${rate} Mbps`;
-  text('#q-summary', `${resolutionLabels[quality.res] || quality.res} · ${quality.fps} FPS · ${rateLabel}`);
+  text('#q-summary', `${resolutionLabels[quality.res] || quality.res} · ${quality.fps} FPS · ${rateLabel} · ${codecLabels[quality.codec] || '自动'}`);
   text('#q-rate-hint', rate === 0 ? '根据局域网带宽自动调整码率' : rateHints[rate] || (rate > 400 ? '更高画质，请确保局域网有足够带宽余量' : '手动码率，最低 20 Mbps'));
   text('#rate-value', rateLabel);
   $('#rate-slider').value = rate;
@@ -1105,7 +1115,7 @@ $$('.seg').forEach(segment => segment.onclick = event => {
   const button = event.target.closest('[data-v]');
   if (!button || !isIdle()) return;
   const key = segment.dataset.key;
-  const value = key === 'res' ? button.dataset.v : Number(button.dataset.v);
+  const value = key === 'res' || key === 'codec' ? button.dataset.v : Number(button.dataset.v);
   model.quality = { ...model.quality, [key]: value };
   renderQuality();
   post('quality', { [key]: value });

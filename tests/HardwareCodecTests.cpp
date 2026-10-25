@@ -152,6 +152,12 @@ void CheckCodec(CodecId codec) {
             }
             if (!packet.keyframe && !rejectedPredictedFrame) { RejectNewStream(packet); rejectedPredictedFrame = true; }
             if (i == 0) {
+                // Display-adapter interop failure must still try hardware on
+                // another GPU before allowing software decoding.
+                const LUID missingDisplayAdapter{0xffffffffu, -1};
+                Decoder alternate(true, &missingDisplayAdapter);
+                DecodeOne(alternate, packet, input);
+                Require(alternate.hardware(), "display adapter mismatch bypassed available NVDEC");
                 auto notKey = packet; notKey.keyframe = false;
                 RejectNewStream(notKey);
             }

@@ -1,4 +1,16 @@
-# LAN3DShare 0.8.0 验证记录
+# LAN3DShare 0.8.1 验证记录
+
+## 0.8.1：音频连续性与传输格式（2026-10-25）
+
+本机接收日志 `20261025T131805Z-receive-{15635516-66F8-4EF3-BAF9-8B71FF6CA61F}.log` 显示 NVDEC AV1、29 次 scheduler reset、5 次 stall、0 次估算 underrun。上一轮为 47 次 reset、9 次 stall、4 次 underrun，limited_frames=0。日志不能证明每声杂音的原因，也不能把另一台电脑的 60→58 FPS 直接归因于解码性能。
+
+接收端增加最多等待 40 ms 的已显示画面对应音频预缓冲，设备队列仍限制 20 ms，落后恢复窗口为 80 ms。短声音不会无限等待凑满预缓冲。真正画面停滞仍在 50 ms 后停止授予音频，既有队列最多自然排空约 20 ms；低缓冲或同步切换时追加 96 帧（2 ms）衰减尾音后停止，再淡入恢复。尾音仅将最后幅度降为零，不释放尚未显示画面对应的源音频；不在音频锁内等待排空。重连、时钟回退和设备更换立即清除旧输出。小幅时间线跳转使用固定长度淡出/淡入衔接，恢复保留用户增益。
+
+新增 `AUDIO_TRANSITION reasons/padding_frames/hard/local100ns`、`AUDIO_SPLICE gap100ns` 和 `AUDIO_PROTECTION fade_tails/scheduler_resets/stalls/reanchors`。原因位：1 会话、2 源音频不连续、4 视频时间回退、8 视频跳跃、16 窗口暂停、32 设备变更、64 画面停滞、128 音频落后。没有录制用户声音。
+
+画质面板支持自动、AV1、H.264、HEVC，保存到 `Codec`，下一次连接生效。自动仍优先双方共有的 NVIDIA 硬件格式。接收优先显示 GPU 的 NVDEC/GPU 输出；不可用时尝试其他 NVIDIA GPU 的 NVDEC（此路径含读回），最后才允许 Windows 软件 H.264。自动/H.264 没有共同硬件时限制 1080p30/20 Mbps，但发送端可用的 NVENC 仍保留；手动 AV1/HEVC 不受支持时明确提示，不静默更改格式。未新增 AMD/Intel 硬件解码后端或 AV1/HEVC 软件解码器。
+
+验证：AudioGain 数值波形检查暂停尾音、异号恢复及跨块拼接；AudioScheduler 模拟每秒一次 20 ms 画面停顿，无缓冲耗尽或额外 reset，并覆盖冻结、重连、回退、短声音和延迟排空不提前消费新音频；AudioEndpoint 使用真实 WASAPI 静音验证。HardwareCodec 对 H.264/HEVC/AV1 验证真实 NVIDIA 编解码、元数据及不存在的显示 GPU 回退至其他硬件。CodecUi 检查格式消息、保存状态回显、默认值、会话锁定和弹窗边界。证据：`build-opt/test-results/audio-continuity/`。这些不等于另一台电脑的扬声器听感验收，也不是 4K60 性能测量。
 
 ## 0.8.0：桌面切换 LeiaSR 时断开（2026-10-25）
 

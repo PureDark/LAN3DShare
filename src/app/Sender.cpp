@@ -587,14 +587,18 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
         if (o.codec == "av1") commonHardware &= lan3d::media::CodecBit(CodecId::Av1);
         else if (o.codec == "hevc") commonHardware &= lan3d::media::CodecBit(CodecId::Hevc);
         else if (o.codec == "h264") commonHardware &= lan3d::media::CodecBit(CodecId::H264);
-        if (!commonHardware && o.codec != "software" && !o.captureCpu)
-            throw std::runtime_error("Requested codec is not supported by both NVIDIA encoder and receiver hardware decoder");
+        const bool fallbackDecoder = !commonHardware && (o.codec == "auto" || o.codec == "h264");
+        if (!commonHardware && (o.codec == "av1" || o.codec == "hevc"))
+            throw std::runtime_error("所选传输格式没有可用的硬件编解码器，请选择自动或 H.264");
+        // Keep NVENC when only the receiver lacks hardware support. The inbox
+        // H.264 decoder is the last resort, after all mutually supported GPUs.
+        if (fallbackDecoder) commonHardware = localHardware & lan3d::media::CodecBit(CodecId::H264);
         uint32_t streamWidth = o.width, streamHeight = o.height, streamFps = o.fps;
         uint32_t streamBitrate = o.bitrate ? o.bitrate : automaticBitrate.target();
-        if (!commonHardware && o.codec != "software") {
+        if (fallbackDecoder) {
             streamWidth = std::min(streamWidth, 1920u); streamHeight = std::min(streamHeight, 1080u);
             streamFps = std::min(streamFps, 30u); streamBitrate = std::min(streamBitrate, 20000000u);
-            std::cout << "FALLBACK Software H.264: no mutually supported hardware codec; target limited to 1080p30/20 Mbps\n" << std::flush;
+            std::cout << "FALLBACK H.264: no mutually supported hardware codec; hardware decode is tried first, software last; target limited to 1080p30/20 Mbps\n" << std::flush;
         }
         if (!commonHardware && !o.bitrate) streamBitrate = lan3d::media::AdaptiveBitrate::Minimum;
         const bool connectionGpu = !o.captureCpu && commonHardware;

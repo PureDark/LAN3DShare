@@ -125,10 +125,33 @@ void VolumeAndReset() {
         "discontinuity replayed old samples or changed metadata");
     Block empty; gain.Apply(empty); Require(ValidBlock(empty), "empty block corrupted");
 }
+void SmoothInterruption() {
+    AudioGain gain(800);
+    Process(gain, Constant(48000, 3000, -1500));
+    const auto tail = gain.FadeOut();
+    Require(tail.Frames() == AudioGain::LookaheadFrames, "fade tail is not bounded to 2 ms");
+    int previous = 24000;
+    for (size_t f = 0; f < tail.Frames(); ++f) {
+        const int sample = tail.samples[f * 2];
+        Require(std::abs(sample - previous) <= 250, "pause abruptly cut the waveform");
+        Require(std::abs(sample + 2 * int(tail.samples[f * 2 + 1])) <= 1, "fade changed stereo balance");
+        previous = sample;
+    }
+    Require(previous == 0, "fade tail did not reach silence");
+    auto resumed = Process(gain, Constant(480, -3000, 1500));
+    Require(resumed[0] == 0, "resume reused pre-pause samples");
+    for (size_t f = 1; f < resumed.size() / 2; ++f)
+        Require(std::abs(int(resumed[f * 2]) - int(resumed[(f - 1) * 2])) <= 250, "resume made a click");
+    gain.JoinDiscontinuity();
+    const auto splice = Process(gain, Constant(480, 3000, -1500), 7);
+    Require(std::abs(int(splice[0]) + 24000) <= 250, "timeline trim abruptly cut previous audio");
+    for (size_t f = 1; f < splice.size() / 2; ++f)
+        Require(std::abs(int(splice[f * 2]) - int(splice[(f - 1) * 2])) <= 250, "timeline splice made a click");
+}
 }
 int main() try {
     const auto start = std::chrono::steady_clock::now();
-    NormalSignals(); ImpulsesAcrossBlocks(); PacketInvariantLimiter(); VolumeAndReset();
+    NormalSignals(); ImpulsesAcrossBlocks(); PacketInvariantLimiter(); VolumeAndReset(); SmoothInterruption();
     std::cout << "AudioGain passed: clean tones/transients, cross-block impulse repair, packet-invariant peak protection, stereo, smooth live volume/mute, timing and reset; delay_frames="
         << AudioGain::DelayFrames << " test_ms=" << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() << '\n';
     return 0;

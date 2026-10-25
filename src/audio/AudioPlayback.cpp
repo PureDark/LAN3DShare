@@ -21,7 +21,7 @@ struct Playback::Impl {
     unsigned appliedVolumePercent{100};
     bool ready{};
     uint64_t submittedFrames{};
-    uint64_t underruns{}, protectionRestarts{};
+    uint64_t underruns{}, protectionRestarts{}, fadeTails{};
     uint32_t paddingFrames{}, maxPaddingFrames{};
     std::string status{"stopped"};
     void SetStatus(const std::string& value, bool isReady) {
@@ -42,8 +42,8 @@ struct Playback::Impl {
                     { std::lock_guard lock(mutex); scheduler.EndpointChanged(); gain.Reset(); }
                     SetStatus("ready sample_rate=48000 channels=2 buffer_frames=" + std::to_string(endpoint.bufferFrames), true);
                     uint64_t checkDefault = detail::Now100ns() + 10000000;
-                    uint64_t reportAt{}, lastInputEnd{}, submittedUntil{};
-                    bool outputActive{};
+                    uint64_t reportAt{}, lastInputEnd{}, submittedUntil{}, drainUntil{}, drainGeneration{};
+                    bool outputActive{}, draining{}, tailPending{}, faded{};
                     while (!stop.load()) {
                         const auto now = detail::Now100ns();
                         {
@@ -52,31 +52,66 @@ struct Playback::Impl {
                             std::lock_guard lock(mutex);
                             UINT32 padding{};
                             detail::Check(endpoint.client->GetCurrentPadding(&padding), "Playback padding");
-                            auto plan = scheduler.Plan(padding, endpoint.bufferFrames > padding ? endpoint.bufferFrames - padding : 0, now);
+                            auto submit = [&](const Block& block) {
+                                BYTE* destination{};
+                                detail::Check(render->GetBuffer(block.Frames(), &destination), "Playback buffer");
+                                std::memcpy(destination, block.samples.data(), block.samples.size() * sizeof(int16_t));
+                                detail::Check(render->ReleaseBuffer(block.Frames(), 0), "Playback submission");
+                                padding += block.Frames(); endpoint.Start();
+                            };
+                            auto resetOutput = [&](bool hard) {
+                                endpoint.Reset(); padding = 0;
+                                if (hard) gain.Reset(); else gain.Restart();
+                                outputMeter.Reset();
+                                outputActive = false; lastInputEnd = 0; draining = tailPending = faded = false;
+                            };
+                            if (draining && (scheduler.Stats().generation != drainGeneration ||
+                                (!tailPending && now >= drainUntil))) resetOutput(scheduler.Stats().generation != drainGeneration);
+                            auto plan = draining ? RenderPlan{} : scheduler.Plan(padding,
+                                endpoint.bufferFrames > padding ? endpoint.bufferFrames - padding : 0, now, true);
                             if (plan.resetEndpoint) {
-                                endpoint.Reset(); padding = 0; gain.Reset(); outputMeter.Reset();
-                                outputActive = false; lastInputEnd = 0; ++protectionRestarts;
-                            } else if (!padding && outputActive && now > submittedUntil) {
+                                const bool hard = (plan.resetReasons & (SessionReset | VideoRollback | audio::EndpointChanged)) != 0;
+                                std::cout << "AUDIO_TRANSITION reasons=" << plan.resetReasons << " padding_frames=" << padding
+                                    << " hard=" << hard << " local100ns=" << now << '\n';
+                                ++protectionRestarts;
+                                if (!hard && padding && outputActive) {
+                                    draining = true; tailPending = !faded;
+                                    drainGeneration = scheduler.Stats().generation;
+                                    drainUntil = now + FrameDuration(padding) + std::max<REFERENCE_TIME>(0, endpoint.streamLatency);
+                                } else resetOutput(hard);
+                            } else if (!draining && !padding && outputActive && now > submittedUntil) {
                                 // Zero padding alone is normal when WASAPI transfers a
                                 // quantum to its engine. Require silence longer than our
                                 // submitted data plus a full endpoint buffer before reset.
                                 gain.Restart(); outputActive = false; lastInputEnd = 0;
+                                scheduler.Rebuffer();
                                 ++underruns; ++protectionRestarts;
+                            }
+                            // The last queued sample must reach zero before the endpoint
+                            // is stopped or runs dry. Never hold the mutex while draining.
+                            if (draining && tailPending && endpoint.bufferFrames - padding >= AudioGain::LookaheadFrames) {
+                                if (padding) { submit(gain.FadeOut()); ++fadeTails; }
+                                tailPending = false; faded = true;
+                                drainUntil = now + FrameDuration(padding) + std::max<REFERENCE_TIME>(0, endpoint.streamLatency);
+                            }
+                            if (!draining && !plan.resetEndpoint && plan.audio.samples.empty() &&
+                                outputActive && !faded && padding && padding <= SampleRate / 200 &&
+                                endpoint.bufferFrames - padding >= AudioGain::LookaheadFrames) {
+                                submit(gain.FadeOut()); ++fadeTails; faded = true;
+                                scheduler.Rebuffer();
                             }
                             if (!plan.audio.samples.empty()) {
                                 const auto pts = plan.audio.timestamp100ns;
                                 if (lastInputEnd && (pts > lastInputEnd ? pts - lastInputEnd : lastInputEnd - pts) > 10000) {
-                                    gain.Restart(); ++protectionRestarts;
+                                    if (padding && !faded) gain.JoinDiscontinuity(); else gain.Restart();
+                                    std::cout << "AUDIO_SPLICE gap100ns=" << (pts > lastInputEnd ? pts - lastInputEnd : lastInputEnd - pts)
+                                        << " padding_frames=" << padding << " local100ns=" << now << '\n';
+                                    ++protectionRestarts;
                                 }
                                 lastInputEnd = plan.audio.End100ns();
                                 gain.Apply(plan.audio);
                                 appliedVolumePercent = gain.Percent();
-                                BYTE* destination{};
-                                detail::Check(render->GetBuffer(plan.audio.Frames(), &destination), "Playback buffer");
-                                std::memcpy(destination, plan.audio.samples.data(), plan.audio.samples.size() * sizeof(int16_t));
-                                detail::Check(render->ReleaseBuffer(plan.audio.Frames(), 0), "Playback submission");
-                                submittedFrames += plan.audio.Frames(); padding += plan.audio.Frames();
-                                endpoint.Start();
+                                submit(plan.audio); submittedFrames += plan.audio.Frames(); faded = false;
                                 submittedUntil = now + FrameDuration(uint64_t(padding) + endpoint.bufferFrames);
                                 outputActive = true;
                                 outputMeter.Add(plan.audio, GetTickCount64());
@@ -86,6 +121,8 @@ struct Playback::Impl {
                                 std::cout << "AUDIO_PROTECTION repaired_samples=" << gain.RepairedSamples()
                                     << " limited_frames=" << gain.LimitedFrames() << " underruns=" << underruns
                                     << " restarts=" << protectionRestarts << " delay_frames=" << AudioGain::DelayFrames
+                                    << " fade_tails=" << fadeTails << " scheduler_resets=" << scheduler.Stats().resets
+                                    << " stalls=" << scheduler.Stats().stalls << " reanchors=" << scheduler.Stats().reanchors
                                     << " volume_percent=" << gain.Percent() << '\n';
                                 reportAt = now + 50000000;
                             }
