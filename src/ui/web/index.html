@@ -342,7 +342,7 @@ body { display: block; padding: 0; background: transparent; user-select: none; }
 .actions { flex: none; }
 .secondary { flex: none; }
 .v-bar { transition: opacity .12s; }
-.viewer:not(.pointer-inside) .v-bar { opacity: 0; pointer-events: none; }
+.viewer:not(.controls-visible) .v-bar { opacity: 0; pointer-events: none; }
 .viewer.interweaving .v-bar, .viewer.interweaving .v-hint, .viewer.interweaving .v-toast { display: none; }
 .resize-handle { position: fixed; z-index: 12; }
 .resize-handle[data-edge="n"], .resize-handle[data-edge="s"] { left: 7px; right: 7px; height: 4px; cursor: ns-resize; }
@@ -382,7 +382,9 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
 .viewer .audio-meter { position: absolute; right: 16px; top: 50px; width: 220px; background: rgba(6,8,12,.64); border-radius: 9px; padding: 8px 12px; margin: 0; color: white; pointer-events: none; }
 .viewer .audio-row, .viewer .audio-status { color: #E4E8EF; }
 .viewer .audio-track { background: #5B616D; }
-.viewer:not(.pointer-inside) .audio-meter, .viewer.interweaving .audio-meter { display: none; }
+.viewer .audio-meter { transition: opacity .12s; }
+.viewer:not(.controls-visible) .audio-meter { opacity: 0; }
+.viewer.interweaving .audio-meter { display: none; }
 </style>
 </head>
 <body data-state="idle">
@@ -988,9 +990,9 @@ function drawViewer() {
   showState(fallback ? 'viewer-fallback' : 'viewer');
   viewerDemo.toggleAttribute('hidden', !model.designScene);
   viewer.style.background = model.designScene ? '#07080C' : 'transparent';
-  if (model.designScene) viewer.classList.add('pointer-inside');
   const sbs = model.kind === 'sbs';
   viewer.classList.toggle('interweaving', !!model.fullscreen && sbs && !fallback && !model.designScene);
+  if (viewer.classList.contains('interweaving')) hideViewerControls();
   text('#viewer-name', model.peerName || '正在接收');
   text('#viewer-kind', sbs && !fallback ? '3D' : '2D');
   $('#viewer-kind').title = sbs ? '正在接收左右并排画面；全屏时显示 3D' : '普通画面';
@@ -1155,8 +1157,42 @@ $('.titlebar').onpointerdown = event => { if (event.button === 0 && !event.targe
 $('.titlebar').ondblclick = event => { if (!event.target.closest('button, input, label')) post('maximize'); };
 $('.v-bar').onpointerdown = event => { if (event.button === 0 && !event.target.closest('button, input, label')) post('drag'); };
 viewer.ondblclick = event => { if (!event.target.closest('button, input, label')) post('fullscreen'); };
-viewer.onpointerenter = () => viewer.classList.add('pointer-inside');
-viewer.onpointerleave = () => { if (!model.designScene) viewer.classList.remove('pointer-inside'); };
+// The controls are revealed only by their own hover area, not by hovering
+// anywhere over the video. Audio/model refreshes never restart this timer.
+let viewerHideTimer = 0;
+let viewerControlsHovered = false;
+function hideViewerControls() {
+  clearTimeout(viewerHideTimer); viewerHideTimer = 0;
+  viewerControlsHovered = false;
+  viewer.classList.remove('controls-visible');
+}
+function scheduleViewerControlsHide() {
+  if (viewerHideTimer || !viewer.classList.contains('controls-visible')) return;
+  viewerHideTimer = setTimeout(() => {
+    viewerHideTimer = 0;
+    if (viewerControlsHovered) return;
+    // Keep the volume slider usable if pointer capture takes a drag outside.
+    if (volumeDragging && viewer.contains(volumeDragging)) scheduleViewerControlsHide();
+    else hideViewerControls();
+  }, 3000);
+}
+function trackViewerControls(event) {
+  if (viewer.classList.contains('interweaving')) return;
+  const contains = element => {
+    const r = element.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && event.clientX >= r.left && event.clientX < r.right &&
+      event.clientY >= r.top && event.clientY < r.bottom;
+  };
+  viewerControlsHovered = contains(viewer.querySelector('.v-bar')) || contains($('#viewer-audio'));
+  if (viewerControlsHovered) {
+    clearTimeout(viewerHideTimer); viewerHideTimer = 0;
+    viewer.classList.add('controls-visible');
+  } else scheduleViewerControlsHide();
+}
+viewer.onpointerenter = trackViewerControls;
+viewer.onpointermove = trackViewerControls;
+viewer.onpointerleave = () => { viewerControlsHovered = false; scheduleViewerControlsHide(); };
+window.addEventListener('blur', () => { viewerControlsHovered = false; scheduleViewerControlsHide(); });
 document.addEventListener('keydown', event => {
   if (event.ctrlKey && ['ArrowUp', 'ArrowDown'].includes(event.key) && (isViewer() || model.phase === 'receiving')) {
     event.preventDefault();

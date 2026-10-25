@@ -2,7 +2,7 @@
 
 **Windows 局域网 2D / 3D 画面与声音共享 · LAN screen and audio sharing for Windows**
 
-[中文](#中文) · [English](#english) · [界面预览 / UI gallery](#ui-gallery) · [下载 / Download v0.7.7](https://github.com/PureDark/LAN3DShare/releases/tag/v0.7.7)
+[中文](#中文) · [English](#english) · [界面预览 / UI gallery](#ui-gallery) · [下载 / Download v0.7.8](https://github.com/PureDark/LAN3DShare/releases/tag/v0.7.8)
 
 ![LAN3DShare — device discovery and source selection](docs/screenshots/idle.png)
 
@@ -18,20 +18,20 @@ LAN3DShare 将普通桌面或游戏交织前的 **SBS 双眼画面**发送到局
 - **DX11 / DX12 SBS 采集**：通过 `SimulatedRealityDirectX.dll` 接入交织前的左右眼画面，支持已运行程序的热附加及兼容的 TitanLeiaBridge 转发路径，尽量避免逐个修改 Mod。具体 API、ABI 与资源约束见技术记录。
 - **GPU 图像管线**：DirectX 采集、复制、缩放与颜色转换，NVENC 编码、NVDEC 解码；支持 AV1、HEVC / H.265、H.264，按硬件能力选择。
 - **可选择发送 GPU**：用 PCI 总线地址区分同型号显卡；跨 GPU 使用两端 D3D12 Copy 队列和共享资源传递图像。
-- **自由接收窗口**：可移动、拉伸，支持全屏；只有收到 LeiaSR SBS 且进入全屏时，才调用接收机本地 runtime 交织。
+- **自由接收窗口**：可移动、拉伸，支持全屏；顶部工具栏和音量表在鼠标离开控件区域 3 秒后隐藏，移回时显示；只有收到 LeiaSR SBS 且进入全屏时，才调用接收机本地 runtime 交织。
 - **画质与带宽控制**：720p / 1080p / 2K / 4K，30 / 60 / 90 / 120 FPS 目标；码率滑条 0–1000 Mbps，整百吸附。0 为自动，非零低于 20 时按 20 Mbps 使用。
 - **系统声音与同步**：跟随实际呈现的视频推进音频，处理跳帧、暂停和重连；两端实时音量表，接收端 0–800% 播放音量可随时调整。
 - **接收端爆音保护**：保守修复孤立采样尖峰，平滑限幅与音量变化，断流恢复淡入；固定增加约 2.1 ms 音频处理延迟。
 
 ### 下载与开始使用
 
-1. 在两台电脑上下载 [LAN3DShare-0.7.7-win64.zip](https://github.com/PureDark/LAN3DShare/releases/download/v0.7.7/LAN3DShare-0.7.7-win64.zip)，解压后双击 `LAN3DShare.exe`。这是**免安装 ZIP 包**；请保留同目录的 `LAN3DCapture.dll`。私有仓库的下载需要登录有访问权限的 GitHub 账号。
+1. 在两台电脑上下载 [LAN3DShare-0.7.8-win64.zip](https://github.com/PureDark/LAN3DShare/releases/download/v0.7.8/LAN3DShare-0.7.8-win64.zip)，解压后双击 `LAN3DShare.exe`。这是**免安装 ZIP 包**；请保留同目录的 `LAN3DCapture.dll`。私有仓库的下载需要登录有访问权限的 GitHub 账号。
 2. 两台电脑接入可互通的 IPv4 局域网。若 Windows 弹出防火墙提示，允许程序在所用的专用网络通信。
 3. 在发送方选择“分享内容”和接收电脑，点击 **连接并发送**。对方会自动打开接收窗口。
 4. 如需 3D，先在源程序中启用 LeiaSR。接收方进入 **全屏显示**（F11 或双击画面），由接收机的 LeiaSR runtime 交织。Esc 退出全屏。
 5. 声音偏小时，在**接收方**调节“播放音量”，无需重连，也无需改变发送方 Windows 音量。任一端断开即可结束共享，不会关闭源游戏。
 
-**更新到 0.7.7：**结束共享、退出需要更新的客户端，再解压覆盖其程序目录并重新打开。已有设置保留。音频保护需要更新**接收端**；此版本未改动游戏内采集 DLL，无需为这次更新重启游戏。未来若替换已加载的采集 DLL，则需重启对应游戏。
+**更新到 0.7.8：**结束共享、退出需要更新的客户端，再解压覆盖其程序目录并重新打开。已有设置保留。自动隐藏功能需要更新**接收端**；此版本未改动游戏内采集 DLL，无需为这次更新重启游戏。未来若替换已加载的采集 DLL，则需重启对应游戏。
 
 ### 环境与 3D 显示规则
 
@@ -70,20 +70,20 @@ LAN3DShare sends a regular desktop or a game's **pre-weave side-by-side stereo i
 - **DX11 / DX12 pre-weave capture.** Hook `SimulatedRealityDirectX.dll` to obtain left/right SBS frames, including hot attachment to running applications and compatible TitanLeiaBridge forwarding implementations. This avoids per-Mod changes where the supported interfaces and resource layouts are available.
 - **GPU video processing.** DirectX capture, copies, scaling and color conversion; NVIDIA NVENC encoding and NVDEC decoding. AV1, HEVC / H.265 and H.264 are selected according to hardware support.
 - **Selectable sending GPU.** PCI bus addresses distinguish identical GPUs. Cross-adapter transport uses D3D12 Copy queues on both GPUs and shared resources.
-- **Flexible viewing.** Move or resize the receiver window; enter fullscreen for local LeiaSR weaving only when the stream is identified as LeiaSR SBS.
+- **Flexible viewing.** Move or resize the receiver window. The top toolbar and audio meters hide three seconds after the pointer leaves their area and reappear on hover; enter fullscreen for local LeiaSR weaving only when the stream is identified as LeiaSR SBS.
 - **Quality controls.** 720p / 1080p / 2K / 4K and target rates of 30 / 60 / 90 / 120 FPS. The 0–1000 Mbps slider snaps near multiples of 100; 0 means automatic, and nonzero values below 20 use 20 Mbps.
 - **Synchronized system audio.** Audio follows presented video through frame drops, pauses and reconnections. Both ends show audio levels; receiver-local playback volume adjusts live from 0–800%.
 - **Receiver audio protection.** Conservative isolated-spike repair, smooth limiting and volume transitions, and a fade-in after interruptions. Fixed processing delay is approximately 2.1 ms.
 
 ### Download and quick start
 
-1. Download [LAN3DShare-0.7.7-win64.zip](https://github.com/PureDark/LAN3DShare/releases/download/v0.7.7/LAN3DShare-0.7.7-win64.zip) on both computers, extract it, and open `LAN3DShare.exe`. This is a **portable ZIP**, not an installer. Keep `LAN3DCapture.dll` next to the executable. Private-repository downloads require a GitHub account with repository access.
+1. Download [LAN3DShare-0.7.8-win64.zip](https://github.com/PureDark/LAN3DShare/releases/download/v0.7.8/LAN3DShare-0.7.8-win64.zip) on both computers, extract it, and open `LAN3DShare.exe`. This is a **portable ZIP**, not an installer. Keep `LAN3DCapture.dll` next to the executable. Private-repository downloads require a GitHub account with repository access.
 2. Connect both computers to a reachable IPv4 LAN. Allow the app through Windows Firewall on the private network in use if prompted.
 3. On the sender, choose the source and destination computer, then click **连接并发送 / Connect and send**. The receiver window opens automatically.
 4. For stereo, enable LeiaSR in the source application. On the receiver, use **全屏显示 / Fullscreen**, F11, or double-click the image. Esc returns to windowed mode.
 5. Adjust **播放音量 / Playback volume** on the receiver while connected. No reconnect or sender Windows-volume change is needed. Disconnecting does not close the source game.
 
-**Updating to 0.7.7:** end the session, exit the client being updated, extract the new files over its application directory, and reopen it. Existing settings are retained. Update the **receiver** to enable audio protection. This release keeps the capture DLL unchanged, so this update does not require a game restart. Future changes to a capture DLL already loaded by a game require restarting that game.
+**Updating to 0.7.8:** end the session, exit the client being updated, extract the new files over its application directory, and reopen it. Existing settings are retained. Update the **receiver** to enable automatic overlay hiding; the audio protection from 0.7.7 is retained. This release keeps the capture DLL unchanged, so this update does not require a game restart. Future changes to a capture DLL already loaded by a game require restarting that game.
 
 ### Requirements and display behavior
 

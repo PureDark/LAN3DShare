@@ -51,6 +51,7 @@ const fixture = () => ({
         Object.assign(model,{type:'viewer',mode:'viewer',peerName:'客厅电脑',kind:'sbs',fullscreen:false,fallback:false});
       }
       await page.evaluate(model=>{window.render(model);return document.fonts.ready.then(()=>{});},model);
+      if(state==='viewer') await page.mouse.move(300, 25);
       if(state==='settings') await page.locator('#settings-gpu').selectOption('pci:0000:03:00.0');
       assert.deepEqual(errors,[],`${state}: JavaScript errors`);
       // Document only the quality controls; the shipped panel still has a

@@ -6,7 +6,7 @@ Set-StrictMode -Version 2.0
 $workspace = [IO.Path]::GetFullPath($PSScriptRoot)
 . (Join-Path $workspace 'scripts\Verify-SymbolPair.ps1')
 
-$version = '0.7.7'
+$version = '0.7.8'
 $baseName = "LAN3DShare-$version"
 $productionNames = @('LAN3DShare.exe', 'LAN3DCapture.dll')
 $buildRoot = [IO.Path]::GetFullPath((Join-Path $workspace $BuildDirectory))
@@ -22,6 +22,8 @@ if ($VerifyOnly) { $pairs; return }
 # Only this explicit list is packaged. Never recurse over build/package, which
 # also contains CLI utilities, tests, and fake vendor runtime fixtures.
 $documentation = @(
+    @{ source = 'build-opt\test-results\viewer-autohide\native.xml'; destination = 'validation\viewer-autohide-native.xml' },
+    @{ source = 'build-opt\test-results\viewer-autohide\result.json'; destination = 'validation\viewer-autohide.json' },
     @{ source = 'docs\TECHNICAL_NOTES.zh-CN.md'; destination = 'docs\TECHNICAL_NOTES.zh-CN.md' },
     @{ source = 'docs\screenshots\idle.png'; destination = 'docs\screenshots\idle.png' },
     @{ source = 'docs\screenshots\picker.png'; destination = 'docs\screenshots\picker.png' },
