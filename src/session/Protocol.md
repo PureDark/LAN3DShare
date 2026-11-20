@@ -8,6 +8,11 @@ broadcast address. Adapter addresses are refreshed every ten seconds. A peer
 expires after four seconds without a valid announcement. The source IP always
 comes from `recvfrom`, never from a payload field.
 
+HDR-aware clients also send a second Hello with a trailing u16 feature value of 1.
+The sender appends the same value to a Request only if it saw that extension from
+the receiver. This lets the receiver safely advertise 10-bit decoder capabilities
+while keeping the original Hello, Request and SDR media compatible with older clients.
+
 The control listener binds an OS-selected available TCP port by default and
 announces that port. One control connection represents one requested/active
 session. Clicking a peer makes this computer the **sender**: its request carries

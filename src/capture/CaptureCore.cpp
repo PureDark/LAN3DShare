@@ -92,11 +92,12 @@ struct Core::Impl {
         DXGI_FORMAT format{};
         struct Completion { ComPtr<ID3D12Fence> fence; uint64_t value{}; };
         std::vector<Completion> completions;
+        uint32_t pendingSubmissions{};
         bool submitted{}, failedSignal{}, sent{};
         uint64_t bytes{};
         uint32_t streamId{};
         bool Ready() const {
-            return submitted && !failedSignal && std::all_of(completions.begin(), completions.end(), [](const auto& c) {
+            return submitted && !pendingSubmissions && !failedSignal && std::all_of(completions.begin(), completions.end(), [](const auto& c) {
                 const auto value = c.fence->GetCompletedValue();
                 return value != UINT64_MAX && value >= c.value;
             });
@@ -324,8 +325,12 @@ struct Core::Impl {
         }
         const auto d = s.input12->GetDesc(); auto format = s.format12 == DXGI_FORMAT_UNKNOWN ? d.Format : s.format12;
         if (d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || d.DepthOrArraySize != 1 || d.MipLevels != 1 ||
-            d.SampleDesc.Count != 1 || !Supported(format) || !Dimensions(d.Width, d.Height)) {
-            Error(s, "unsupported DX12 input: require SDR RGBA8/BGRA8, 2D, one mip/slice, non-MSAA"); return;
+            d.SampleDesc.Count != 1 || !(Supported(format) || (GpuOutput() && format == DXGI_FORMAT_R16G16B16A16_FLOAT)) || !Dimensions(d.Width, d.Height)) {
+            std::ostringstream message; message << "unsupported DX12 input: format=" << unsigned(format)
+                << " resource_format=" << unsigned(d.Format) << " size=" << d.Width << 'x' << d.Height
+                << " mips=" << d.MipLevels << " slices=" << d.DepthOrArraySize << " samples=" << d.SampleDesc.Count
+                << "; require SDR RGBA8/BGRA8 (GPU also RGBA16F), 2D, one mip/slice, non-MSAA";
+            Error(s, message.str()); return;
         }
         ComPtr<ID3D12Device> device, listDevice;
         if (FAILED(s.input12->GetDevice(IID_PPV_ARGS(&device))) || FAILED(s.list12->GetDevice(IID_PPV_ARGS(&listDevice))) || device.Get() != listDevice.Get()) {
@@ -346,7 +351,7 @@ struct Core::Impl {
         for (const auto& x : retired) heldBytes += x->bytes;
         for (const auto& x : reusable12) heldBytes += x->bytes;
         for (const auto& [_, l] : lists) { heldSlots += l.slots.size(); for (const auto& x : l.slots) heldBytes += x->bytes; }
-        if (heldSlots >= 24 || heldBytes + d.Width * d.Height * 4 > 512ull * 1024 * 1024) {
+        if (heldSlots >= 24 || heldBytes + d.Width * d.Height * (format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4) > 512ull * 1024 * 1024) {
             if (slot) reusable12.push_back(std::move(slot));
             Error(s, "DX12 recorded captures at limit; waiting for Reset, GPU completion and consumer release"); return;
         }
@@ -576,7 +581,7 @@ void Core::ForgetList12(ID3D12GraphicsCommandList* l) {
 }
 void Core::ForgetQueue12(ID3D12CommandQueue* q) { std::lock_guard lock(p_->mutex); p_->queues.erase(q); }
 void Core::Execute12(ID3D12CommandQueue* q, UINT count, ID3D12CommandList* const* lists, const std::function<void()>& original) {
-    std::lock_guard lock(p_->mutex);
+    std::unique_lock lock(p_->mutex);
     std::vector<std::shared_ptr<Impl::Slot12>> submitted;
     std::vector<uint64_t> observed;
     for (UINT i = 0; i < count; ++i) {
@@ -586,8 +591,19 @@ void Core::Execute12(ID3D12CommandQueue* q, UINT count, ID3D12CommandList* const
         observed.push_back(list->identity.serial);
         submitted.insert(submitted.end(), list->slots.begin(), list->slots.end());
     }
-    // Serialize submission and CPU mapping, including re-executions and queues.
-    original();
+    // The next hook may acquire a host/mod lock also held by a thread releasing
+    // an unrelated D3D12 object. Never call it while holding our global lock.
+    // Pending counters protect the captured recording through concurrent Poll,
+    // Reset, Stop and repeated/nested submission, including an old ready fence.
+    for (auto& slot : submitted) ++slot->pendingSubmissions;
+    lock.unlock();
+    try { original(); }
+    catch (...) {
+        lock.lock();
+        for (auto& slot : submitted) { --slot->pendingSubmissions; slot->failedSignal = true; }
+        throw; // Completion is unknown; keep the resources quarantined.
+    }
+    lock.lock();
     for (const auto identity : observed) if (const auto list = p_->lists.find(identity); list != p_->lists.end()) list->second.submissionObserved = true;
     if (submitted.empty()) return;
     auto& queue = p_->queues[q]; if (!queue.fence) { ComPtr<ID3D12Device> d; q->GetDevice(IID_PPV_ARGS(&d)); if (d) d->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&queue.fence)); }
@@ -599,5 +615,8 @@ void Core::Execute12(ID3D12CommandQueue* q, UINT count, ID3D12CommandList* const
         auto it = std::find_if(slot->completions.begin(), slot->completions.end(), [&](const auto& c) { return c.fence.Get() == queue.fence.Get(); });
         if (it == slot->completions.end()) slot->completions.push_back({queue.fence, value}); else it->value = value;
     }
+    // Fence setup can itself re-enter a Release hook on this thread. Keep
+    // pending protection until every new completion has been recorded.
+    for (auto& slot : submitted) --slot->pendingSubmissions;
 }
 }

@@ -126,17 +126,24 @@ its reuse pool, avoiding per-frame committed-resource creation. Each backend
 has a 24-allocation / 512 MiB capture budget (DX11 counts pixel bytes); unknown
 submissions and unacknowledged leases count toward that budget.
 
-The image contract is SDR RGBA8/BGRA8 input, sent as top-down BGRA8 left|right
-SBS using the actual resource/view dimensions. HDR, tone mapping, separate-eye
+The image contract is SDR RGBA8/BGRA8 input; DX12 GPU capture also accepts
+RGBA16F storage for display-encoded SDR SBS. The actual resource/view dimensions
+are preserved. HDR, tone mapping, separate-eye
 textures, arbitrary crops, protected textures, D3D11 deferred contexts and
 enhanced-barrier-only DX12 rendering are not supported by this first version.
 CPU mode retains top-down BGRA8 readback for diagnostics and compatibility.
-GPU mode preserves source RGBA8/BGRA8 byte order in the shared texture and
+GPU mode preserves source RGBA8/BGRA8/RGBA16F bytes in the shared texture and
 normalizes the sRGB view format to UNORM without changing pixels. Its producer
 does no Map/readback or CPU frame copy. GPU scaling, color conversion and NVENC
 input belong to the external sender. This is a GPU copy into a reusable shared
 texture, not direct ownership of the game's mutable input texture. Real-game
 4K60 and game-frame-rate impact still require measured acceptance.
+
+For RGBA16F, the external sender normalizes SDR channels to RGBA8 with a D3D11
+compute shader on the selected encoding GPU, then uses its usual VP/NVENC path.
+This clamps SDR values; it does not infer an HDR transfer function from the
+floating-point format or apply HDR tone mapping. Cross-adapter transfer retains
+FP16 until this conversion. CPU capture remains limited to RGBA8/BGRA8.
 
 Stop disables capturing/publishing. Hooks, the capture DLL and hooked runtime
 modules stay resident until process exit; unloading them while runtime objects
@@ -144,6 +151,12 @@ or GPU recordings still refer to them would be unsafe. A partial initialization
 reports a persistent error rather than claiming that a retry succeeded.
 Pending copies are invalidated across Stop/Start without freeing GPU-visible
 allocations, so re-sharing the same running weaver cannot replay an old frame.
+
+DX12 queue submission calls the next ExecuteCommandLists hook without holding
+the capture mutex: another host thread may hold a mod lock while releasing a
+tracked object. Per-slot pending submission counts keep textures unavailable
+through nested/concurrent submissions until all new completion fences have
+been recorded. Copy recording stays on the calling thread before weave.
 
 Offline tests use real WARP devices with D3D11/D3D12 debug layers. Core tests
 verify pixel contents, mask/final selection, SRV mip/slice handling, explicit

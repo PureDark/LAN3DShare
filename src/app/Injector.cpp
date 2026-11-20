@@ -7,6 +7,7 @@
 #include <limits>
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 
 namespace lan3d {
 namespace {
@@ -94,7 +95,7 @@ struct DebugLaunch {
         CloseHandle(process.hProcess);
     }
 };
-bool Invoke(HANDLE process, uintptr_t function, const void* arg, size_t bytes, uint32_t& result, std::string& error) {
+bool Invoke(HANDLE process, uintptr_t function, const void* arg, size_t bytes, uint32_t& result, std::string& error, const char* stage) {
     void* remote = nullptr;
     if (bytes) {
         remote = VirtualAllocEx(process, nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -105,16 +106,21 @@ bool Invoke(HANDLE process, uintptr_t function, const void* arg, size_t bytes, u
             return false;
         }
     }
-    Handle thread(CreateRemoteThread(process, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(function), remote, 0, nullptr));
+    const auto began = std::chrono::steady_clock::now();
+    std::cout << "CAPTURE_BOOTSTRAP stage=" << stage << " pid=" << GetProcessId(process) << " begin=1\n" << std::flush;
+    DWORD threadId{};
+    Handle thread(CreateRemoteThread(process, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(function), remote, 0, &threadId));
     if (!thread.value) {
         error = Error("Cannot start capture bootstrap");
         if (remote) VirtualFreeEx(process, remote, 0, MEM_RELEASE);
         return false;
     }
+    std::cout << "CAPTURE_BOOTSTRAP stage=" << stage << " thread=" << threadId << " waiting=1\n" << std::flush;
     const auto wait = WaitForSingleObject(thread.value, 30000);
     if (wait != WAIT_OBJECT_0) {
         // The target may still access its parameters; never free them or terminate its thread here.
-        error = "Capture bootstrap did not finish within 30 seconds; target was left running";
+        error = std::string("Capture bootstrap ") + stage + " did not finish (thread " + std::to_string(threadId) +
+            ", wait " + std::to_string(wait) + "); target was left running";
         return false;
     }
     DWORD code{};
@@ -122,6 +128,8 @@ bool Invoke(HANDLE process, uintptr_t function, const void* arg, size_t bytes, u
     if (remote) VirtualFreeEx(process, remote, 0, MEM_RELEASE);
     if (!ok) { error = Error("Cannot read capture bootstrap result"); return false; }
     result = code;
+    std::cout << "CAPTURE_BOOTSTRAP stage=" << stage << " result=" << code << " elapsed_ms="
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count() << '\n' << std::flush;
     return true;
 }
 DWORD ExportRva(const std::wstring& path, const char* name) {
@@ -270,7 +278,7 @@ bool InjectCapture(uint32_t pid, const std::wstring& path, std::string& error, c
     if (!remoteOwner) { error = "Loader module unavailable in target"; return false; }
     const auto address = remoteOwner + reinterpret_cast<uintptr_t>(load) - reinterpret_cast<uintptr_t>(owner);
     uint32_t ignored{};
-    if (!Invoke(process.value, address, normalized.c_str(), (normalized.size() + 1) * sizeof(wchar_t), ignored, error)) return false;
+    if (!Invoke(process.value, address, normalized.c_str(), (normalized.size() + 1) * sizeof(wchar_t), ignored, error, "LoadLibraryW")) return false;
     if (!ModuleBase(pid, normalized, true)) { error = "Target could not load capture DLL (check runtime dependencies and application policy)"; return false; }
     return true;
 }
@@ -286,6 +294,6 @@ bool CallCapture(uint32_t pid, const std::wstring& path, const char* name, const
     if (!base) { error = "Capture DLL is not loaded from the expected folder"; return false; }
     const auto rva = ExportRva(normalized, name);
     if (!rva) { error = std::string("Capture export missing: ") + name; return false; }
-    return Invoke(process.value, base + rva, argument, bytes, result, error);
+    return Invoke(process.value, base + rva, argument, bytes, result, error, name);
 }
 }

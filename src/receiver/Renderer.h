@@ -13,6 +13,8 @@ public:
     void Open(HWND window, HMONITOR monitor, bool preview, const std::filesystem::path& runtime, bool autoDisplay = false);
     void Upload(const Frame& frame);
     LUID AdapterLuid() const;
+    bool HdrDisplay() const { return hdrDisplay_; }
+    bool PresentingHdr() const { return hdrSwap_; }
     bool Thumbnail(const Frame& metadata, Frame& thumbnail);
     bool SetFullscreen(bool fullscreen, std::string& error);
     void SetStereoEnabled(bool enabled);
@@ -32,6 +34,7 @@ private:
     HWND window_{};
     bool preview_{}, autoDisplay_{}, runtimeActive_{}, lastPresentSucceeded_{};
     bool stereoEnabled_{true};
+    bool hdrDisplay_{}, hdrImage_{}, hdrSwap_{};
     ContentKind kind_{ContentKind::Desktop};
     std::filesystem::path runtimeDirectory_;
     unsigned width_{}, height_{}, inputWidth_{}, inputHeight_{};

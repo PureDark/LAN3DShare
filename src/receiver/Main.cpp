@@ -35,7 +35,7 @@ struct Options {
     std::string host;
     uint16_t port{48730};
     std::filesystem::path runtime{L"C:\\Program Files\\LeiaSR\\Platform\\bin"};
-    bool preview{}, selfTest{}, listMonitors{}, fullscreen{}, hidden{}, autoDisplay{}, recoverStream{}, noAudio{}, profile{};
+    bool hdrPeer{}, preview{}, selfTest{}, listMonitors{}, fullscreen{}, hidden{}, autoDisplay{}, recoverStream{}, noAudio{}, profile{};
     int monitor{-1};
     unsigned frames{}, receiveFrames{}, timeout{10};
     unsigned volumePercent{100};
@@ -87,6 +87,7 @@ Options Parse(int argc, wchar_t** argv) {
         else if (arg == L"--frames") o.frames = Number(value(), 1, 100000000, "frames");
         else if (arg == L"--receive-frames") o.receiveFrames = Number(value(), 1, 100000000, "receive-frames");
         else if (arg == L"--timeout") o.timeout = Number(value(), 1, 3600, "timeout");
+        else if (arg == L"--hdr-peer") o.hdrPeer = true;
         else if (arg == L"--profile") o.profile = true;
         else if (arg == L"--volume-percent") o.volumePercent = Number(value(), 0, 800, "volume-percent");
         else if (arg == L"--runtime-dir") o.runtime = value();
@@ -407,7 +408,7 @@ public:
         if (worker.joinable()) worker.join();
         playback.Stop();
     }
-    void Start(const Options& options, LUID outputAdapter) {
+    void Start(const Options& options, LUID outputAdapter, bool hdrDisplay) {
         playback.SetVolume(options.volumePercent);
         audioEnabled = !options.noAudio && !options.selfTest;
         if (audioEnabled) {
@@ -417,13 +418,13 @@ public:
                 std::cerr << "AUDIO_UNAVAILABLE " << e.what() << '\n' << std::flush;
             }
         }
-        worker = std::thread([this, options, outputAdapter] {
+        worker = std::thread([this, options, outputAdapter, hdrDisplay] {
             StageProfile profile(options.profile, "RECEIVE_PROFILE", {"receive_wait", "decode"});
             try {
                 const bool recovery = RecoveryEnabled(options);
                 auto lastComplete = Clock::now();
                 { std::lock_guard lock(mutex); lastFrame = lastComplete; }
-                const uint32_t hardwareDecoders = media::HardwareDecodeCapabilities();
+                const uint32_t hardwareDecoders = media::HardwareDecodeCapabilities(&outputAdapter, options.hdrPeer && hdrDisplay);
                 std::string detail, lastFailure;
                 uint64_t previousSequence{}, previousTimestamp{};
                 bool havePrevious{};
@@ -500,7 +501,7 @@ public:
                             profile.Record(1, decodeStart); profile.Print();
                             if (stop) break;
                             if (recovery && Clock::now() >= lastComplete + std::chrono::seconds(6)) failExpired();
-                            const auto codec = std::string(decoder.hardware() ? "NVDEC " : "Software ") + media::CodecName(packet.config.codec);
+                            const auto codec = std::string(decoder.hardware() ? "NVDEC " : "Software ") + media::CodecName(packet.config.codec) + (packet.config.hdr ? " HDR10 PQ BT.2020 10-bit" : "");
                             if (codec != previousCodec) { previousCodec = codec; std::cout << "DECODER " << codec << '\n' << std::flush; }
                             // Audio can arrive before its decoded image is uploaded,
                             // but playback has no credit until the UI presents it.
@@ -707,7 +708,7 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
         state.volumeChanged = [&](unsigned percent) { network.SetVolume(percent); };
         struct VolumeCleanup { WindowState& state; ~VolumeCleanup() { state.volumeChanged = {}; } } volumeCleanup{state};
         ui::PreviewPublisher preview;
-        if (!options.selfTest) network.Start(options, renderer.AdapterLuid());
+        if (!options.selfTest) network.Start(options, renderer.AdapterLuid(), renderer.HdrDisplay());
         audio::TelemetryPublisher audioTelemetry([&] { return network.AudioTelemetry(); });
         nlohmann::json audioModel; uint64_t audioModelTick{};
         readyEvent.Signal();
@@ -904,7 +905,7 @@ int lan3d::RunReceiver(int argc, wchar_t** argv) {
                 if (!options.selfTest) std::cout << "AUDIO_STATE " << network.AudioStatus() << '\n';
                 if (options.autoDisplay) {
                     const nlohmann::json stats{{"kind", IsLeia(renderer.Content()) ? "sbs" : "desktop"}, {"leftEyeOnly", renderer.Content() == ContentKind::LeiaLeft},
-                        {"hasFrame", renderer.HasFrame()}, {"receivingFps", receiveFps},
+                        {"hasFrame", renderer.HasFrame()}, {"hdr", renderer.PresentingHdr()}, {"receivingFps", receiveFps},
                         {"recovering", recovering},
                         {"width", displayed ? displayed->width : 0}, {"height", displayed ? displayed->height : 0},
                         {"fullscreen", state.fullscreen}, {"weaving", renderer.IsWeaving()}, {"stereoEnabled", state.stereoEnabled}};

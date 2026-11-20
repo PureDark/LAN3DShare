@@ -10,7 +10,7 @@ namespace lan3d::media {
 // D3D11 compute converts that GPU buffer to a shared BGRA texture.
 class DecodedGpuOutput {
 public:
-    bool Open(LUID adapter, uint32_t width, uint32_t height, std::string& error);
+    bool Open(LUID adapter, uint32_t width, uint32_t height, bool hdr, std::string& error);
     ID3D11Buffer* Input() const { return input_.Get(); }
     bool Convert(Frame& frame, std::string& error);
 private:
@@ -24,5 +24,6 @@ private:
     std::vector<std::shared_ptr<Slot>> slots_;
     LUID adapter_{};
     uint32_t width_{}, height_{};
+    bool hdr_{};
 };
 }

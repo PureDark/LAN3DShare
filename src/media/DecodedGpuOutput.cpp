@@ -11,10 +11,23 @@ void Check(HRESULT hr, const char* action) { if (FAILED(hr)) { char code[32]; sp
 constexpr char ConvertShader[] = R"(
 ByteAddressBuffer nv12 : register(t0);
 RWTexture2D<float4> bgra : register(u0);
-cbuffer Size : register(b0) { uint width; uint height; uint surfaceHeight; uint padding; };
+cbuffer Size : register(b0) { uint width; uint height; uint surfaceHeight; uint hdr; };
 uint Byte(uint offset) { return (nv12.Load(offset & ~3u) >> ((offset & 3u) * 8)) & 255u; }
+uint Ten(uint index) { return (nv12.Load((index & ~1u) * 2) >> ((index & 1u) * 16 + 6)) & 1023u; }
+float3 ToScRgb(float3 pq) {
+    float3 n = pow(saturate(pq), 32.0/2523);
+    float3 wide = 125.0 * pow(max(n-.8359375, 0) / (18.8515625-18.6875*n), 16384.0/2610);
+    return mul(float3x3(1.660491,-.587641,-.072850, -.124550,1.132900,-.008349, -.018151,-.100579,1.118730), wide);
+}
 [numthreads(16,16,1)] void Main(uint3 p : SV_DispatchThreadID) {
     if (p.x >= width || p.y >= height) return;
+    if (hdr) {
+        uint uv = surfaceHeight * width + (p.y / 2) * width + (p.x & ~1u);
+        float y = (float(Ten(p.y * width + p.x))-64)/876;
+        float u = (float(Ten(uv))-512)/896, v = (float(Ten(uv+1))-512)/896;
+        bgra[p.xy] = float4(ToScRgb(float3(y+1.4746*v, y-.164553*u-.571353*v, y+1.8814*u)), 1);
+        return;
+    }
     float y = float(Byte(p.y * width + p.x)) - 16;
     uint uv = surfaceHeight * width + (p.y / 2) * width + (p.x & ~1u);
     float u = float(Byte(uv)) - 128; float v = float(Byte(uv + 1)) - 128;
@@ -27,22 +40,22 @@ struct DecodedGpuOutput::Slot : GpuImage {
     HANDLE handle{};
     ~Slot() { if (handle) CloseHandle(handle); }
 };
-bool DecodedGpuOutput::Open(LUID adapter, uint32_t width, uint32_t height, std::string& error) {
+bool DecodedGpuOutput::Open(LUID adapter, uint32_t width, uint32_t height, bool hdr, std::string& error) {
     try {
-        adapter_ = adapter; width_ = width; height_ = height;
+        hdr_ = hdr; adapter_ = adapter; width_ = width; height_ = height;
         ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> selected;
         Check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "decoder factory");
         Check(factory->EnumAdapterByLuid(adapter, IID_PPV_ARGS(&selected)), "decoder GPU adapter");
         Check(D3D11CreateDevice(selected.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             nullptr, 0, D3D11_SDK_VERSION, &device_, nullptr, &context_), "decoder D3D11 device");
-        D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth = (width * ((height + 1) & ~1u) * 3 / 2 + 3) & ~3u;
+        D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth = (width * ((height + 1) & ~1u) * 3 / 2 * (hdr ? 2u : 1u) + 3) & ~3u;
         buffer.BindFlags = D3D11_BIND_SHADER_RESOURCE; buffer.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
         Check(device_->CreateBuffer(&buffer, nullptr, &input_), "decoder NV12 GPU buffer");
         D3D11_SHADER_RESOURCE_VIEW_DESC view{}; view.Format = DXGI_FORMAT_R32_TYPELESS;
         view.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX; view.BufferEx.NumElements = buffer.ByteWidth / 4;
         view.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
         Check(device_->CreateShaderResourceView(input_.Get(), &view, &inputView_), "decoder NV12 view");
-        const uint32_t size[]{width, height, (height + 1) & ~1u, 0};
+        const uint32_t size[]{width, height, (height + 1) & ~1u, unsigned(hdr)};
         buffer = {}; buffer.ByteWidth = sizeof(size); buffer.Usage = D3D11_USAGE_IMMUTABLE; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         D3D11_SUBRESOURCE_DATA data{size}; Check(device_->CreateBuffer(&buffer, &data, &constants_), "decoder dimensions");
         ComPtr<ID3DBlob> shader, messages;
@@ -60,7 +73,7 @@ bool DecodedGpuOutput::Convert(Frame& frame, std::string& error) {
             if (slots_.size() >= 8) { frame = {}; return true; } // bounded latest-frame delivery; never overwrite an in-flight reader
             slot = std::make_shared<Slot>();
             D3D11_TEXTURE2D_DESC desc{}; desc.Width = width_; desc.Height = height_;
-            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+            desc.Format = hdr_ ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
             desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
             desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
             Check(device_->CreateTexture2D(&desc, nullptr, &slot->texture), "decoder shared output");

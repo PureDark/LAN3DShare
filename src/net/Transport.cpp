@@ -158,6 +158,8 @@ bool ValidSessionToken(const std::string& token) {
 }
 struct TcpConnection::Impl : SocketState {
     bool sentAny{}, receivedAny{}, authenticated{}, capabilities{};
+    uint32_t decoderMask{};
+    bool AllowsHdr(media::CodecId codec) const { return capabilities && (decoderMask & media::HdrCodecBit(codec)); }
     std::array<uint8_t, 8> modeBytes{};
     size_t modeRead{};
     Clock::time_point modeStarted{};
@@ -258,14 +260,14 @@ IoResult TcpConnection::AuthenticateServer(const std::string& token, uint32_t ti
 IoResult TcpConnection::SendCapabilities(uint32_t hardwareDecoders, uint32_t timeoutMs, std::string& error) {
     error.clear();
     if (!IsOpen()) return IoResult::Closed;
-    if ((hardwareDecoders & ~7u) || impl_->sentAny || impl_->receivedAny || impl_->capabilities) {
+    if ((hardwareDecoders & ~media::DecoderCapsMask) || impl_->sentAny || impl_->receivedAny || impl_->capabilities) {
         error = "Invalid or repeated decoder capability preface"; impl_->Close(); return IoResult::Error;
     }
     std::array<uint8_t, 12> header{};
     Put32(header.data(), CapsMagic); Put32(header.data() + 4, WireVersion); Put32(header.data() + 8, hardwareDecoders);
     size_t total{};
     const auto result = impl_->Transfer(true, header.data(), header.size(), Deadline(timeoutMs), total, error);
-    if (result != IoResult::Ok) impl_->Close(); else impl_->capabilities = true;
+    if (result != IoResult::Ok) impl_->Close(); else { impl_->capabilities = true; impl_->decoderMask = hardwareDecoders; }
     return result;
 }
 IoResult TcpConnection::ReceiveCapabilities(uint32_t& hardwareDecoders, uint32_t timeoutMs, std::string& error) {
@@ -277,11 +279,11 @@ IoResult TcpConnection::ReceiveCapabilities(uint32_t& hardwareDecoders, uint32_t
     std::array<uint8_t, 12> header{};
     size_t total{};
     auto result = impl_->Transfer(false, header.data(), header.size(), Deadline(timeoutMs), total, error);
-    if (result == IoResult::Ok && (Get32(header.data()) != CapsMagic || Get32(header.data() + 4) != WireVersion || (Get32(header.data() + 8) & ~7u))) {
+    if (result == IoResult::Ok && (Get32(header.data()) != CapsMagic || Get32(header.data() + 4) != WireVersion || (Get32(header.data() + 8) & ~media::DecoderCapsMask))) {
         error = "Incompatible media protocol; update both clients to the same version"; result = IoResult::Error;
     }
     if (result != IoResult::Ok) impl_->Close();
-    else { hardwareDecoders = Get32(header.data() + 8); impl_->capabilities = true; }
+    else { impl_->decoderMask = hardwareDecoders = Get32(header.data() + 8); impl_->capabilities = true; }
     return result;
 }
 IoResult TcpConnection::SendStereoMode(bool enabled, uint32_t timeoutMs, std::string& error) {
@@ -334,7 +336,7 @@ IoResult TcpConnection::PollStereoMode(bool& enabled, std::string& error) {
 IoResult TcpConnection::Send(const media::EncodedFrame& packet, uint32_t timeoutMs, std::string& error) {
     error.clear();
     if (!IsOpen()) return IoResult::Closed;
-    if (!media::ValidPacket(packet) || (!impl_->sentAny && !packet.keyframe)) { error = "Invalid video packet or connection did not start with a keyframe"; return IoResult::Error; }
+    if (!media::ValidPacket(packet) || (packet.config.hdr && !impl_->AllowsHdr(packet.config.codec)) || (!impl_->sentAny && !packet.keyframe)) { error = "Invalid video packet or connection did not start with a keyframe"; return IoResult::Error; }
     if (!audio::ValidBlock(packet.audio) || !ValidAudioHeader(packet.audio.timestamp100ns, packet.audio.Frames(),
         packet.audio.discontinuity ? 1u : 0u, packet.timestamp100ns)) {
         error = "Invalid audio block, size, or audio interval beyond its video timestamp";
@@ -342,7 +344,7 @@ IoResult TcpConnection::Send(const media::EncodedFrame& packet, uint32_t timeout
     }
     std::array<uint8_t, HeaderSize> header{};
     Put32(header.data(), WireMagic); Put32(header.data() + 4, WireVersion); Put32(header.data() + 8, HeaderSize);
-    Put32(header.data() + 12, (packet.keyframe ? 1u : 0u) | (packet.kind == ContentKind::LeiaSbs ? 2u : packet.kind == ContentKind::LeiaLeft ? 4u : 0u));
+    Put32(header.data() + 12, (packet.keyframe ? 1u : 0u) | (packet.config.hdr ? 8u : 0u) | (packet.kind == ContentKind::LeiaSbs ? 2u : packet.kind == ContentKind::LeiaLeft ? 4u : 0u));
     Put32(header.data() + 16, packet.config.width); Put32(header.data() + 20, packet.config.height);
     Put32(header.data() + 24, packet.config.fps); Put32(header.data() + 28, packet.config.bitrate);
     Put64(header.data() + 32, packet.sequence); Put64(header.data() + 40, packet.timestamp100ns);
@@ -384,6 +386,7 @@ IoResult TcpConnection::Receive(media::EncodedFrame& packet, uint32_t timeoutMs,
     if (result == IoResult::Ok) result = impl_->Transfer(false, header.data() + 12, header.size() - 12, deadline, total, error);
     if (result == IoResult::Ok) {
         const auto* h = header.data();
+        packet.config.hdr = (Get32(h + 12) & 8) != 0;
         packet.keyframe = (Get32(h + 12) & 1) != 0;
         packet.kind = (Get32(h + 12) & 4) ? ContentKind::LeiaLeft : (Get32(h + 12) & 2) ? ContentKind::LeiaSbs : ContentKind::Desktop;
         packet.config.width = Get32(h + 16); packet.config.height = Get32(h + 20);
@@ -395,7 +398,8 @@ IoResult TcpConnection::Receive(media::EncodedFrame& packet, uint32_t timeoutMs,
         const uint32_t audioFrames = Get32(h + 72), audioFlags = Get32(h + 76);
         packet.audio.timestamp100ns = Get64(h + 64); packet.audio.discontinuity = (audioFlags & 1) != 0;
         if (Get32(h) != WireMagic || Get32(h + 4) != WireVersion || Get32(h + 8) != HeaderSize ||
-            (Get32(h + 12) & ~7u) || ((Get32(h + 12) & 6u) == 6u) || !ValidDisplaySize(packet.displayWidth, packet.displayHeight) ||
+            (Get32(h + 12) & ~15u) || ((Get32(h + 12) & 6u) == 6u) || !ValidDisplaySize(packet.displayWidth, packet.displayHeight) ||
+            (packet.config.hdr && (packet.kind != ContentKind::Desktop || !impl_->AllowsHdr(packet.config.codec))) ||
             !media::ValidConfig(packet.config) || extra > media::MaxSequenceHeaderBytes || !size || size > media::MaxEncodedBytes ||
             !ValidAudioHeader(packet.audio.timestamp100ns, audioFrames, audioFlags, packet.timestamp100ns) ||
             (!impl_->receivedAny && !packet.keyframe)) {

@@ -2,6 +2,7 @@
 #include "media/GpuAdapter.h"
 #include "common/GpuImage.h"
 #include <d3d11_1.h>
+#include <DirectXPackedVector.h>
 #include "common/GpuFrameBus.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -31,9 +32,9 @@ struct SharedScene {
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12DescriptorHeap> rtvs;
     ComPtr<ID3D12Fence> fence;
-    std::array<ComPtr<ID3D12Resource>, 3> textures;
-    std::array<HANDLE, 3> shared{};
-    std::array<GpuFrame, 3> frames;
+    std::array<ComPtr<ID3D12Resource>, 4> textures;
+    std::array<HANDLE, 4> shared{};
+    std::array<GpuFrame, 4> frames;
     ~SharedScene() { for (auto handle : shared) if (handle) CloseHandle(handle); }
     bool Initialize() {
         ComPtr<IDXGIFactory4> factory;
@@ -54,13 +55,13 @@ struct SharedScene {
         Check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "test allocator");
         Check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commands)), "test commands");
         Check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "test fence");
-        D3D12_DESCRIPTOR_HEAP_DESC heap{}; heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; heap.NumDescriptors = 3;
+        D3D12_DESCRIPTOR_HEAP_DESC heap{}; heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; heap.NumDescriptors = UINT(textures.size());
         Check(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&rtvs)), "test RTV heap");
         const UINT increment = device->GetDescriptorHandleIncrementSize(heap.Type);
         for (unsigned n = 0; n < textures.size(); ++n) {
             auto& metadata = frames[n];
             metadata.width = Width; metadata.height = Height;
-            metadata.format = n < 2 ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+            metadata.format = n < 2 ? DXGI_FORMAT_B8G8R8A8_UNORM : n == 2 ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
             metadata.adapterLuid = luid; metadata.sequence = n + 1; metadata.timestamp100ns = n + 1;
             swprintf_s(metadata.textureName, L"Local\\LAN3DShare.GpuEncodeTest.%lu.%llu.%u",
                 GetCurrentProcessId(), GetTickCount64(), n);
@@ -79,7 +80,8 @@ struct SharedScene {
             for (unsigned y = 0; y < 12; ++y) for (unsigned x = 0; x < 32; ++x) {
                 const unsigned eye = x / 16;
                 const float shade = float(16 + ((x * 37 + y * 23 + n * 49) % 192)) / 255.f;
-                const float color[]{eye ? 0.08f : shade, float(40 + n * 45) / 255.f, eye ? shade : 0.08f, 1.f};
+                float color[]{eye ? 0.08f : shade, float(40 + n * 45) / 255.f, eye ? shade : 0.08f, 1.f};
+                if (n == 3 && y == 0 && x == 0) { color[0] = 4.f; color[1] = 2.f; color[2] = .25f; }
                 const D3D12_RECT rect{LONG(x * (Width / 32)), LONG(y * (Height / 12)),
                     LONG((x + 1) * (Width / 32)), LONG((y + 1) * (Height / 12))};
                 commands->ClearRenderTargetView(rtv, color, 1, &rect);
@@ -122,7 +124,8 @@ void CheckPixels(const Frame& frame, unsigned pattern, bool leftOnly = false) {
     }
 }
 // Diagnostic readback only: production decoder/rendering never downloads a full frame.
-Frame ReadGpu(const Frame& input) {
+template<class Inspect>
+void InspectGpu(const Frame& input, Inspect inspect) {
     Require(input.bgra.empty() && input.gpu && ValidVideoFrame(input), "Decoder did not return a GPU-only frame");
     ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter;
     Check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "readback factory");
@@ -136,13 +139,42 @@ Frame ReadGpu(const Frame& input) {
     desc.BindFlags = desc.MiscFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     Check(device->CreateTexture2D(&desc, nullptr, &staging), "diagnostic staging"); context->CopyResource(staging.Get(), texture.Get());
     D3D11_MAPPED_SUBRESOURCE mapped{}; Check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "diagnostic map");
+    inspect(desc, mapped);
+    context->Unmap(staging.Get(), 0);
+}
+Frame ReadGpu(const Frame& input) {
     Frame output = input; output.gpu.reset(); output.stride = input.width * 4; output.bgra.resize(size_t(output.stride) * output.height);
-    for (unsigned y = 0; y < output.height; ++y) for (unsigned x = 0; x < output.width; ++x) {
-        const auto* from = static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch + x * 4;
-        auto* to = output.bgra.data() + size_t(y) * output.stride + x * 4;
-        to[0] = from[2]; to[1] = from[1]; to[2] = from[0]; to[3] = from[3];
-    }
-    context->Unmap(staging.Get(), 0); return output;
+    InspectGpu(input, [&](const D3D11_TEXTURE2D_DESC&, const D3D11_MAPPED_SUBRESOURCE& mapped) {
+        for (unsigned y = 0; y < output.height; ++y) for (unsigned x = 0; x < output.width; ++x) {
+            const auto* from = static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch + x * 4;
+            auto* to = output.bgra.data() + size_t(y) * output.stride + x * 4;
+            to[0] = from[2]; to[1] = from[1]; to[2] = from[0]; to[3] = from[3];
+        }
+    });
+    return output;
+}
+void HdrRoundTrip(SharedScene& scene, CodecId codec) {
+    auto source = scene.frames[3]; source.kind = ContentKind::Desktop;
+    CodecConfig config{3840, 2160, 60, 200000000, {}, codec};
+    config.hdr = true;
+    Encoder encoder; Decoder decoder(true, &source.adapterLuid);
+    std::string error;
+    std::vector<EncodedFrame> packets; std::vector<Frame> frames;
+    Require(encoder.ConfigureGpu(config, source, error), error);
+    Require(encoder.EncodeGpu(source, packets, error) && packets.size() == 1 && packets[0].config.hdr, error);
+    Require(decoder.Decode(packets[0], frames, error) && frames.size() == 1, error);
+    InspectGpu(frames[0], [&](const D3D11_TEXTURE2D_DESC& desc, const D3D11_MAPPED_SUBRESOURCE& mapped) {
+        Require(desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT, "HDR decode was quantized to SDR");
+        const auto row = static_cast<const uint8_t*>(mapped.pData) + (desc.Height / 24) * mapped.RowPitch;
+        const auto pixel = reinterpret_cast<const uint16_t*>(row) + (desc.Width / 64) * 4;
+        const float expected[]{4.f, 2.f, .25f};
+        for (int c = 0; c < 3; ++c) {
+            const float value = DirectX::PackedVector::XMConvertHalfToFloat(pixel[c]);
+            std::cout << " " << value;
+            Require(std::abs(value - expected[c]) < .05f + expected[c] * .03f, "scRGB highlight color or luminance was lost");
+        }
+    });
+    std::cout << " " << CodecName(codec) << " HDR highlight round trip PASS\n";
 }
 void MonoTransitions(SharedScene& scene, CodecId codec, const LUID* target) {
     Encoder encoder;
@@ -151,8 +183,8 @@ void MonoTransitions(SharedScene& scene, CodecId codec, const LUID* target) {
     unsigned index{};
     // Deliberately keep coded dimensions unchanged: content changes must still
     // restart from a keyframe, with the original left eye at full resolution.
-    for (bool leftOnly : {false, true, false, true}) {
-        const auto& input = scene.frames[index++ % 3];
+    for (bool leftOnly : {false, true, false, true, true, false, true, false}) {
+        const auto& input = scene.frames[index++ % scene.frames.size()];
         CodecConfig config{3840, 2160, 60, 100000000, {}, codec};
         config.leftEyeOnly = leftOnly;
         Require(encoder.ConfigureGpu(config, input, error, target), "Mode configure: " + error);
@@ -165,7 +197,7 @@ void MonoTransitions(SharedScene& scene, CodecId codec, const LUID* target) {
         std::vector<Frame> frames;
         Require(decoder.Decode(packet, frames, error) && decoder.hardware() && frames.size() == 1, "Mode decode: " + error);
         Require(frames[0].kind == packet.kind, "Decoded mono content kind was lost");
-        CheckPixels(ReadGpu(frames[0]), (index - 1) % 3, leftOnly);
+        CheckPixels(ReadGpu(frames[0]), unsigned((index - 1) % scene.frames.size()), leftOnly);
     }
     std::cout << CodecName(codec) << " GPU crop before scale; SBS/left/SBS/left keyframes, bitrate, NVDEC and eye pixels PASS\n";
 }
@@ -297,6 +329,15 @@ int main(int argc, char** argv) {
         SharedScene scene;
         if (!scene.Initialize()) { std::cout << "SKIP: NVIDIA D3D12 device unavailable\n"; return 77; }
         const std::string option = argc > 1 ? argv[1] : "";
+        if (option == "--hdr") {
+            const auto mask = HardwareDecodeCapabilities(&scene.frames[3].adapterLuid, true);
+            bool tested = false;
+            for (const auto codec : {CodecId::Av1, CodecId::Hevc}) {
+                if (!(mask & HdrCodecBit(codec))) continue;
+                HdrRoundTrip(scene, codec); tested = true;
+            }
+            return tested ? 0 : 77;
+        }
         const bool mono = option == "--mono" || option == "--mono-cross";
         LUID target{}; bool cross = option == "--cross" || option == "--mono-cross";
         if (cross) {

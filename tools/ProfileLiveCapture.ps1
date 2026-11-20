@@ -96,14 +96,16 @@ try {
     # Baseline binaries before the GPU switch was added do not know this option.
     if (-not $Gpu -and $OutputDir -like '*perf-baseline*') { $senderArgs = $senderArgs | Where-Object { $_ -ne '--capture-cpu' } }
     $sender = Start-Helper 'sender' $senderPath $senderArgs
-    $deadline = [DateTime]::UtcNow.AddSeconds(12)
+    # Bootstrap itself permits a 30-second remote call. Do not kill a valid
+    # cold-start attach before that diagnostic can report its result.
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
     $listening = $false
     do {
         if (Observe-Exit $sender) { throw "Sender exited before listening: $(Read-Log $sender.Stderr)" }
         if ((Read-Log $sender.Stdout) -match 'Listening on') { $listening = $true; break }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    if (-not $listening) { throw 'Sender did not become ready within 12 seconds' }
+    if (-not $listening) { throw 'Sender did not become ready within 45 seconds' }
     if ($WireSink) {
         $sinkArgs = @('--verify-port', '48746', '--wire-sink')
         if ($SinkSeconds -ne 10) { $sinkArgs += @('--measure-seconds', $SinkSeconds) }
@@ -122,6 +124,8 @@ try {
         Start-Sleep -Milliseconds 100
     }
     if ($sender.ExitCode) { throw "Sender exit $($sender.ExitCode): $(Read-Log $sender.Stderr)" }
+    $sent = [regex]::Match((Read-Log $sender.Stdout), 'Stopped\. Sent (\d+) frames\.')
+    if (-not $sent.Success -or [uint64]$sent.Groups[1].Value -eq 0) { throw 'No video frames were sent during the sample' }
     if ($WireSink) {
         if (-not $receiver.Process.WaitForExit(6000)) { throw 'Wire sink did not finish after the sender ended' }
         $null = Observe-Exit $receiver

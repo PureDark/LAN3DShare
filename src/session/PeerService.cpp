@@ -277,6 +277,7 @@ struct Service::Impl {
         Reader r{body};
         Peer peer; peer.id = Lower(r.Fixed(36)); const auto target = Lower(r.Fixed(36)); const auto token = Lower(r.Fixed(32));
         const auto mediaPort = r.U16(); peer.controlPort = r.U16(); const auto requestedWait = r.U32(); peer.name = r.String(); peer.address = address;
+        if (!r.End()) peer.hdrMedia = r.U16() == 1;
         if (!r.End() || !Guid(peer.id) || peer.id == config.localId || target != config.localId || !Hex(token, 32) ||
             !mediaPort || !peer.controlPort || !Text(peer.name, 96) || requestedWait < 100 || requestedWait > 30000) return;
         auto request = std::make_shared<Pending>();
@@ -335,9 +336,13 @@ struct Service::Impl {
         if (!Header(header, type, size) || type != Type::Hello || size + HeaderBytes != static_cast<size_t>(count)) return;
         Bytes payload(data.begin() + HeaderBytes, data.begin() + count); Reader r{payload};
         Peer peer; peer.id = Lower(r.Fixed(36)); peer.controlPort = r.U16(); const auto stateValue = r.U16(); peer.name = r.String(); peer.address = Ip(from);
+        if (!r.End()) peer.hdrMedia = r.U16() == 1;
         if (!r.End() || !Guid(peer.id) || peer.id == config.localId || !peer.controlPort || stateValue > 3 || !Text(peer.name, 96) || peer.address.empty()) return;
         peer.state = static_cast<State>(stateValue);
         std::lock_guard lock(mutex);
+        const auto previous = peers.find(peer.id);
+        if (previous != peers.end() && previous->second.peer.controlPort == peer.controlPort && previous->second.peer.address == peer.address)
+            peer.hdrMedia |= previous->second.peer.hdrMedia;
         if (peers.size() < MaxPeers || peers.count(peer.id)) peers[peer.id] = {peer, Clock::now()};
     }
     void Main() {
@@ -351,10 +356,14 @@ struct Service::Impl {
                 nextAdapters = now + std::chrono::seconds(10);
             }
             if (now >= nextHello) {
-                const auto message = Message(Type::Hello, Hello());
+                auto hello = Hello();
+                const auto message = Message(Type::Hello, hello);
+                U16(hello, 1); // Older clients accept only the original announcement.
+                const auto extended = Message(Type::Hello, hello);
                 for (const auto& target : targets) {
                     sockaddr_in address{}; if (!Address(target.address, target.port, address)) continue;
                     sendto(udp->value, reinterpret_cast<const char*>(message.data()), static_cast<int>(message.size()), 0, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+                    sendto(udp->value, reinterpret_cast<const char*>(extended.data()), static_cast<int>(extended.size()), 0, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
                 }
                 nextHello = now + std::chrono::milliseconds(config.helloIntervalMs);
                 std::lock_guard lock(mutex);
@@ -454,6 +463,7 @@ bool Service::RequestReceive(const Peer& requestedPeer, const std::string& reque
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
     if (remaining < 100) { error = "Request deadline expired while connecting"; return false; }
     U32(request, static_cast<uint32_t>(remaining)); String(request, p.config.displayName);
+    if (peer.hdrMedia) U16(request, 1);
     if (!Send(socket->value, Type::Request, request, deadline, stopped)) { error = "Cannot send receiver request"; return false; }
     Type type{}; Bytes response;
     if (Receive(socket->value, type, response, deadline, stopped) != Io::Ok || type != Type::Response) { error = "Receiver request timed out, was cancelled, or received an invalid reply"; return false; }

@@ -10,7 +10,7 @@ public:
     ~NvDecoder();
     NvDecoder(const NvDecoder&) = delete;
     NvDecoder& operator=(const NvDecoder&) = delete;
-    static uint32_t Probe();
+    static uint32_t Probe(const LUID* adapter = nullptr, bool includeHdr = false);
     bool Configure(const CodecConfig& config, std::string& error);
     bool Decode(const EncodedFrame& packet, std::vector<Frame>& frames, std::string& error);
 private:

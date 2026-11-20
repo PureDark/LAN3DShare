@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include <d3d11_1.h>
+#include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <chrono>
 #include <cstring>
@@ -48,7 +49,13 @@ void Renderer::Open(HWND window, HMONITOR monitor, bool preview, const std::file
             ComPtr<IDXGIOutput> output;
             if (adapter->EnumOutputs(j, &output) == DXGI_ERROR_NOT_FOUND) break;
             DXGI_OUTPUT_DESC desc{};
-            if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == monitor) { selected = adapter; break; }
+            if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == monitor) {
+                selected = adapter;
+                ComPtr<IDXGIOutput6> output6; DXGI_OUTPUT_DESC1 color{};
+                hdrDisplay_ = SUCCEEDED(output.As(&output6)) && SUCCEEDED(output6->GetDesc1(&color)) &&
+                    color.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+                break;
+            }
         }
     }
     const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
@@ -100,14 +107,22 @@ void Renderer::Resize() {
     RECT rect{};
     GetClientRect(window_, &rect);
     const auto width = unsigned(rect.right), height = unsigned(rect.bottom);
-    if (!width || !height || (width == width_ && height == height_)) return;
+    if (!width || !height || (width == width_ && height == height_ && hdrSwap_ == hdrImage_)) return;
     dc_->OMSetRenderTargets(0, nullptr, nullptr);
     target_.Reset();
-    Check(swap_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0), "Resize swap chain");
+    const auto format = hdrImage_ ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
+    Check(swap_->ResizeBuffers(0, width, height, format, 0), "Resize swap chain");
+    if (hdrSwap_ != hdrImage_) {
+        ComPtr<IDXGISwapChain3> swap3;
+        Check(swap_.As(&swap3), "Get swap-chain color-space interface");
+        Check(swap3->SetColorSpace1(hdrImage_ ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709), "Set display color space");
+        hdrSwap_ = hdrImage_;
+        std::cout << "DISPLAY_COLOR " << (hdrSwap_ ? "HDR scRGB FP16" : "SDR sRGB") << '\n' << std::flush;
+    }
     ComPtr<ID3D11Texture2D> backbuffer;
     Check(swap_->GetBuffer(0, IID_PPV_ARGS(&backbuffer)), "Get backbuffer");
     D3D11_RENDER_TARGET_VIEW_DESC rtv{};
-    rtv.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    rtv.Format = hdrImage_ ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
     rtv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
     Check(device_->CreateRenderTargetView(backbuffer.Get(), &rtv, &target_), "Create sRGB backbuffer view");
     width_ = width; height_ = height;
@@ -123,7 +138,8 @@ void Renderer::Upload(const Frame& frame) {
     displayWidth_ = frame.displayWidth ? frame.displayWidth : (kind_ == ContentKind::LeiaSbs ? frame.width / 2 : frame.width);
     displayHeight_ = frame.displayHeight ? frame.displayHeight : frame.height;
     if (kind_ != ContentKind::LeiaSbs && runtimeActive_) DisableRuntime();
-    const auto format = frame.gpu && frame.gpu->metadata.format == DXGI_FORMAT_R8G8B8A8_UNORM ? DXGI_FORMAT_R8G8B8A8_TYPELESS : DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    hdrImage_ = frame.gpu && frame.gpu->metadata.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+    const auto format = hdrImage_ ? DXGI_FORMAT_R16G16B16A16_FLOAT : frame.gpu && frame.gpu->metadata.format == DXGI_FORMAT_R8G8B8A8_UNORM ? DXGI_FORMAT_R8G8B8A8_TYPELESS : DXGI_FORMAT_B8G8R8A8_TYPELESS;
     if (frame.width != inputWidth_ || frame.height != inputHeight_ || format != inputFormat_) {
         ID3D11ShaderResourceView* nullView{};
         dc_->PSSetShaderResources(0, 1, &nullView);
@@ -135,7 +151,7 @@ void Renderer::Upload(const Frame& frame) {
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         Check(device_->CreateTexture2D(&desc, nullptr, &input_), "Create received SBS texture");
         D3D11_SHADER_RESOURCE_VIEW_DESC view{};
-        view.Format = format == DXGI_FORMAT_R8G8B8A8_TYPELESS ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        view.Format = hdrImage_ ? DXGI_FORMAT_R16G16B16A16_FLOAT : format == DXGI_FORMAT_R8G8B8A8_TYPELESS ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
         view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; view.Texture2D.MipLevels = 1;
         Check(device_->CreateShaderResourceView(input_.Get(), &view, &inputView_), "Create received SBS view");
         inputWidth_ = frame.width; inputHeight_ = frame.height; inputFormat_ = format;

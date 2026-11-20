@@ -1,8 +1,11 @@
 #include "DesktopCapture.h"
+#include "DesktopRegion.h"
 #include "common/FrameBus.h"
 #include <Windows.h>
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_6.h>
+#include <d3dcompiler.h>
+#include <cstdio>
 #include <wrl/client.h>
 #include <algorithm>
 #include <array>
@@ -30,6 +33,84 @@ std::string Hresult(const char* operation, HRESULT hr) {
 bool Lost(HRESULT hr) {
     return hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_SESSION_DISCONNECTED;
 }
+float DesktopWhiteScale(const std::wstring& name) {
+    UINT32 paths{}, modes{};
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &paths, &modes) != ERROR_SUCCESS) return 1.f;
+    std::vector<DISPLAYCONFIG_PATH_INFO> active(paths);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modeInfo(modes);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &paths, active.data(), &modes, modeInfo.data(), nullptr) != ERROR_SUCCESS) return 1.f;
+    for (UINT32 i = 0; i < paths; ++i) {
+        const auto& path = active[i];
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header = {DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, sizeof(source), path.sourceInfo.adapterId, path.sourceInfo.id};
+        if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS || name != source.viewGdiDeviceName) continue;
+        DISPLAYCONFIG_SDR_WHITE_LEVEL level{};
+        level.header = {DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL, sizeof(level), path.targetInfo.adapterId, path.targetInfo.id};
+        if (DisplayConfigGetDeviceInfo(&level.header) == ERROR_SUCCESS && level.SDRWhiteLevel) return 1000.f / level.SDRWhiteLevel;
+    }
+    return 1.f;
+}
+
+// Convert only when the stream needs SDR. The desktop device owns this context.
+struct DesktopSdrConverter {
+    ComPtr<ID3D11Texture2D> input, output;
+    ComPtr<ID3D11ShaderResourceView> inputView;
+    ComPtr<ID3D11RenderTargetView> target;
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11PixelShader> ps;
+    ComPtr<ID3D11Buffer> constants;
+    HRESULT Draw(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* source,
+        const D3D11_BOX& region, ID3D11Texture2D* destination, float whiteScale) {
+        const UINT width = region.right - region.left, height = region.bottom - region.top;
+        HRESULT hr{};
+        if (!ps) {
+            constexpr char shader[] = R"(
+                Texture2D<float4> image : register(t0);
+                cbuffer White : register(b0) { float scale; };
+                float4 VS(uint i : SV_VertexID) : SV_Position {
+                    return float4(float2((i << 1) & 2, i & 2) * float2(2,-2) + float2(-1,1), 0, 1);
+                }
+                float4 PS(float4 p : SV_Position) : SV_Target {
+                    return float4(saturate(image.Load(int3(p.xy,0)).rgb * scale), 1);
+                })";
+            ComPtr<ID3DBlob> v, p;
+            if (FAILED(hr = D3DCompile(shader, sizeof(shader)-1, nullptr, nullptr, nullptr, "VS", "vs_5_0", 0, 0, &v, nullptr)) ||
+                FAILED(hr = D3DCompile(shader, sizeof(shader)-1, nullptr, nullptr, nullptr, "PS", "ps_5_0", 0, 0, &p, nullptr))) return hr;
+            if (FAILED(hr = device->CreateVertexShader(v->GetBufferPointer(), v->GetBufferSize(), nullptr, &vs)) ||
+                FAILED(hr = device->CreatePixelShader(p->GetBufferPointer(), p->GetBufferSize(), nullptr, &ps))) return hr;
+            const float scale[4]{whiteScale};
+            D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth = sizeof(scale); buffer.Usage = D3D11_USAGE_IMMUTABLE; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            D3D11_SUBRESOURCE_DATA initial{scale};
+            if (FAILED(hr = device->CreateBuffer(&buffer, &initial, &constants))) return hr;
+        }
+        D3D11_TEXTURE2D_DESC desc{};
+        if (input) input->GetDesc(&desc);
+        if (desc.Width != width || desc.Height != height || !target) {
+            inputView.Reset(); target.Reset(); input.Reset(); output.Reset();
+            desc = {}; desc.Width = width; desc.Height = height; desc.ArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
+            desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(hr = device->CreateTexture2D(&desc, nullptr, &input)) ||
+                FAILED(hr = device->CreateShaderResourceView(input.Get(), nullptr, &inputView))) return hr;
+            // The sRGB RTV does the linear-to-sRGB transfer on store.
+            desc.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS; desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            D3D11_RENDER_TARGET_VIEW_DESC view{}; view.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+            if (FAILED(hr = device->CreateTexture2D(&desc, nullptr, &output)) ||
+                FAILED(hr = device->CreateRenderTargetView(output.Get(), &view, &target))) return hr;
+        }
+        context->CopySubresourceRegion(input.Get(), 0, 0, 0, 0, source, 0, &region);
+        const D3D11_VIEWPORT viewport{0, 0, float(width), float(height), 0, 1};
+        context->RSSetViewports(1, &viewport);
+        context->OMSetRenderTargets(1, target.GetAddressOf(), nullptr);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->VSSetShader(vs.Get(), nullptr, 0); context->PSSetShader(ps.Get(), nullptr, 0);
+        context->PSSetShaderResources(0, 1, inputView.GetAddressOf()); context->PSSetConstantBuffers(0, 1, constants.GetAddressOf());
+        context->Draw(3, 0);
+        ID3D11ShaderResourceView* empty{};
+        context->PSSetShaderResources(0, 1, &empty); context->OMSetRenderTargets(0, nullptr, nullptr);
+        context->CopyResource(destination, output.Get());
+        return S_OK;
+    }
+};
 }
 struct DesktopCapture::Impl {
     struct Slot {
@@ -47,7 +128,10 @@ struct DesktopCapture::Impl {
     ComPtr<IDXGIOutputDuplication> duplication;
     std::array<Slot, 3> slots;
     uint64_t sequence{};
-    bool gpuMode{};
+    bool gpuMode{}, center4k{}, allowHdr{}, hdrDisplay{};
+    float whiteScale{1.f};
+    DesktopSdrConverter sdrConverter;
+    DXGI_FORMAT loggedSource{DXGI_FORMAT_UNKNOWN}, loggedOutput{DXGI_FORMAT_UNKNOWN};
     Slot* current{};
     LUID adapterLuid{};
     ULONGLONG retryAt{};
@@ -55,6 +139,7 @@ struct DesktopCapture::Impl {
     void ResetGpu() {
         // These are D3D11-owned copies, never a game's device or resources.
         if (context) context->Flush();
+        sdrConverter = {}; loggedSource = loggedOutput = DXGI_FORMAT_UNKNOWN;
         current = nullptr; slots = {}; duplication.Reset(); context.Reset(); device.Reset(); captured = false;
     }
     bool Recreate(std::string& error) {
@@ -93,13 +178,27 @@ struct DesktopCapture::Impl {
         hr = D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             levels, 1, D3D11_SDK_VERSION, &device, nullptr, &context);
         if (FAILED(hr)) { error = Hresult("Desktop D3D11CreateDevice", hr); return false; }
-        hr = output->DuplicateOutput(device.Get(), &duplication);
+        ComPtr<IDXGIOutput6> output6; DXGI_OUTPUT_DESC1 color{};
+        hdrDisplay = SUCCEEDED(output.As(&output6)) && SUCCEEDED(output6->GetDesc1(&color)) && color.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+        whiteScale = hdrDisplay ? DesktopWhiteScale(monitorName) : 1.f;
+        ComPtr<IDXGIOutput5> output5;
+        if (SUCCEEDED(output.As(&output5))) {
+            constexpr DXGI_FORMAT formats[]{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT};
+            hr = output5->DuplicateOutput1(device.Get(), 0, hdrDisplay ? 2 : 1, formats, &duplication);
+        } else hr = E_NOINTERFACE;
+        // Some HDR drivers expose Output5 but reject an explicit format list.
+        // Inspect the actual texture from the legacy entry point in that case.
+        if (hr == E_NOINTERFACE || hr == E_NOTIMPL || hr == DXGI_ERROR_UNSUPPORTED || hr == E_INVALIDARG)
+            hr = output->DuplicateOutput(device.Get(), &duplication);
         if (FAILED(hr)) { error = Hresult("DuplicateOutput", hr); ResetGpu(); return false; }
         DXGI_OUTDUPL_DESC desc{}; duplication->GetDesc(&desc);
-        if (desc.ModeDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM || desc.Rotation != DXGI_MODE_ROTATION_IDENTITY) {
-            error = "Desktop duplication requires unrotated BGRA8 output"; ResetGpu(); return false;
+        // The output above establishes orientation. Some drivers leave the
+        // duplication rotation unspecified. Validate format on the acquired texture.
+        if (desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED && desc.Rotation != DXGI_MODE_ROTATION_IDENTITY) {
+            error = "Unsupported desktop duplication rotation " + std::to_string(desc.Rotation); ResetGpu(); return false;
         }
-        const auto width = desc.ModeDesc.Width, height = desc.ModeDesc.Height;
+        const auto region = SelectDesktopRegion(desc.ModeDesc.Width, desc.ModeDesc.Height, center4k);
+        const auto width = region.width, height = region.height;
         if (width < 4 || (width & 1) || width > MaxWidth || height < 2 || height > MaxHeight || uint64_t(width) * height * 4 > MaxFrameBytes) {
             error = "Desktop dimensions exceed the supported even-width video frame limits"; ResetGpu(); return false;
         }
@@ -138,11 +237,15 @@ struct DesktopCapture::Impl {
 };
 DesktopCapture::DesktopCapture() : p_(std::make_unique<Impl>()) {}
 DesktopCapture::~DesktopCapture() = default;
-bool DesktopCapture::Open(unsigned monitorIndex, std::string& error) {
+bool DesktopCapture::Open(unsigned monitorIndex, std::string& error, bool center4k) {
     Close(); error.clear(); const auto monitors = Monitors();
     if (monitorIndex >= monitors.size()) { error = "Desktop monitor index is out of range"; return false; }
     p_->monitorName = monitors[monitorIndex].name;
+    p_->center4k = center4k;
     p_->opened = p_->Recreate(error); return p_->opened;
+}
+void DesktopCapture::AllowHdr(bool enabled) {
+    if (p_->allowHdr != enabled) { p_->allowHdr = enabled; RequestRefresh(); }
 }
 void DesktopCapture::Close() { p_->ResetGpu(); p_->opened = false; p_->monitorName.clear(); p_->sequence = 0; p_->retryAt = 0; }
 void DesktopCapture::RequestRefresh() {
@@ -186,11 +289,23 @@ DesktopCaptureResult DesktopCapture::CaptureInternal(Frame* cpu, GpuFrame* gpu, 
     ComPtr<ID3D11Texture2D> texture;
     auto hr = resource.As(&texture); if (FAILED(hr)) { error = Hresult("Desktop image Texture2D", hr); return DesktopCaptureResult::Error; }
     D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
-    if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM || desc.SampleDesc.Count != 1 || desc.ArraySize != 1 || desc.MipLevels != 1 ||
+    const auto region = SelectDesktopRegion(desc.Width, desc.Height, p_->center4k);
+    desc.Width = region.width; desc.Height = region.height;
+    const auto sourceFormat = desc.Format;
+    const bool floating = sourceFormat == DXGI_FORMAT_R16G16B16A16_FLOAT;
+    if ((!floating && sourceFormat != DXGI_FORMAT_B8G8R8A8_UNORM) || desc.SampleDesc.Count != 1 || desc.ArraySize != 1 || desc.MipLevels != 1 ||
         desc.Width < 4 || (desc.Width & 1) || desc.Width > MaxWidth || desc.Height < 2 || desc.Height > MaxHeight || uint64_t(desc.Width) * desc.Height * 4 > MaxFrameBytes) {
-        error = "Unsupported desktop duplication image format or dimensions"; return DesktopCaptureResult::Error;
+        error = "Unsupported desktop duplication image (DXGI format " + std::to_string(desc.Format) + ", " +
+            std::to_string(desc.Width) + "x" + std::to_string(desc.Height) + ")"; return DesktopCaptureResult::Error;
     }
-    if (!idle->staging || idle->width != desc.Width || idle->height != desc.Height) {
+    const bool convertToSdr = floating && !(gpu && p_->hdrDisplay && p_->allowHdr);
+    if (convertToSdr) desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    if (p_->loggedSource != sourceFormat || p_->loggedOutput != desc.Format) {
+        printf("DESKTOP_COLOR source_dxgi=%u hdr_display=%u output=%s white_scale=%.3f\n", unsigned(sourceFormat),
+            unsigned(p_->hdrDisplay), desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? "scRGB" : "SDR", p_->whiteScale);
+        fflush(stdout); p_->loggedSource = sourceFormat; p_->loggedOutput = desc.Format;
+    }
+    if (!idle->staging || idle->width != desc.Width || idle->height != desc.Height || idle->metadata.format != desc.Format) {
         idle->staging.Reset(); idle->query.Reset(); idle->sharedHandle.reset();
         auto staging = desc;
         staging.Usage = gpu ? D3D11_USAGE_DEFAULT : D3D11_USAGE_STAGING;
@@ -213,9 +328,15 @@ DesktopCaptureResult DesktopCapture::CaptureInternal(Frame* cpu, GpuFrame* gpu, 
         }
         const D3D11_QUERY_DESC query{D3D11_QUERY_EVENT, 0}; hr = p_->device->CreateQuery(&query, &idle->query);
         if (FAILED(hr)) { error = Hresult("Desktop copy query allocation", hr); idle->staging.Reset(); return DesktopCaptureResult::Error; }
+        idle->metadata.format = desc.Format;
         idle->width = desc.Width; idle->height = desc.Height;
     }
-    p_->context->CopyResource(idle->staging.Get(), texture.Get()); p_->context->End(idle->query.Get()); p_->context->Flush();
+    const D3D11_BOX box{region.x, region.y, 0, region.x + region.width, region.y + region.height, 1};
+    if (convertToSdr) {
+        hr = p_->sdrConverter.Draw(p_->device.Get(), p_->context.Get(), texture.Get(), box, idle->staging.Get(), p_->whiteScale);
+        if (FAILED(hr)) { error = Hresult("Desktop FP16 to SDR conversion", hr); return DesktopCaptureResult::Error; }
+    } else p_->context->CopySubresourceRegion(idle->staging.Get(), 0, 0, 0, 0, texture.Get(), 0, &box);
+    p_->context->End(idle->query.Get()); p_->context->Flush();
     idle->sequence = ++p_->sequence; idle->timestamp = Timestamp100ns(); idle->busy = true; p_->captured = true;
     return ready;
 }

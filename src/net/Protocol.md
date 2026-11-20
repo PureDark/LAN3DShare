@@ -16,7 +16,7 @@ are no native C++ structs or padding on the wire.
 | 0 | 4 | Magic `0x4c334453` (`L3DS`) |
 | 4 | 4 | Protocol version, `6` (all other versions are rejected) |
 | 8 | 4 | Header length, `80` |
-| 12 | 4 | Flags: bit 0 = keyframe; bit 1 = Leia SBS; bit 2 = Leia left eye only; bits 1 and 2 are mutually exclusive; all other bits zero |
+| 12 | 4 | Flags: bit 0 = keyframe; bit 1 = Leia SBS; bit 2 = Leia left eye only; bit 3 = negotiated 10-bit HDR desktop; bits 1 and 2 are mutually exclusive; all other bits zero |
 | 16 | 4 | Total visible image width (both eyes when SBS) |
 | 20 | 4 | Visible height |
 | 24 | 4 | Integer nominal frame rate |
@@ -71,8 +71,11 @@ Encoding converts top-down
 BGRA8 SDR sRGB into NV12 with BT.709 coefficients and limited nominal range.
 Odd visible heights repeat the final row to obtain an even coded height;
 decoding removes that row. The decoder accounts for MFT output stride and
-macroblock padding. Alpha is opaque after decoding. All supported 4:2:0 codecs are lossy; this
-protocol does not promise a pixel-exact desktop image or preserve HDR.
+macroblock padding. Alpha is opaque after decoding. HDR-capable peers can instead carry a Windows HDR desktop as AV1 or HEVC Main 10,
+using P010 with limited-range BT.2020 non-constant-luminance coefficients and PQ.
+The receiver validates the bitstream color tags and renders linear FP16 scRGB.
+Legacy receivers, SDR displays and H.264 receive an SDR conversion. A floating-point
+Leia source alone does not establish a color space.
 
 NVENC uses D3D11 input, P5 low-latency tuning, CBR, spatial AQ, no B-frames or
 lookahead, and a two-frame VBV. NVDEC uses the display driver's parser/decoder
@@ -125,7 +128,9 @@ CLI sessions without `--session-token` omit this preface but still use wire v6.
 
 After the optional token preface, the receiver sends a 12-byte capability preface:
 `L3DC` (u32 `0x4c334443`), protocol version (u32 `6`), hardware decoder mask
-(u32: H.264=1, HEVC=2, AV1=4). All integers are in network byte order. Unknown
+(u32: H.264=1, HEVC=2, AV1=4, HDR HEVC=16, HDR AV1=32).
+HDR bits are sent only after an HDR-aware session invitation and only for a display
+in HDR mode with a matching 10-bit hardware decoder. All integers are in network byte order. Unknown
 bits and versions close the connection. H.264 software decoding is implicit even
 with a zero mask. The sender intersects this mask with its NVENC capabilities,
 prefers AV1 then HEVC then H.264, and identifies the selected codec in every

@@ -44,6 +44,7 @@ auto Request(Service& service, const Peer& peer, unsigned token, unsigned timeou
 }
 void Accept(Service& receiver) {
     const auto event = WaitEvent(receiver, Event::Kind::IncomingRequest);
+    Check(event.peer.hdrMedia, "HDR media invitation extension was lost");
     Check(event.peer.address == "127.0.0.1" && event.mediaPort == 48730, "Request did not preserve TCP source IP or media port");
     std::string error; Check(receiver.Reply(event.requestId, true, {}, error), error);
 }
@@ -112,6 +113,7 @@ int main() try {
     b.Stop(); Check(Until([&] { return a.Snapshot().empty(); }), "Offline peer did not expire");
     configB.displayName = "Client B renamed"; Check(b.Start(configB, error), error); peerB = Find(a, IdB); Check(peerB.name == configB.displayName, "Reappearing peer name did not update");
     Peer peerA{IdA, "Client A", "127.0.0.1", a.localControlPort(), State::Idle};
+    Check(Until([&] { peerB = Find(a, IdB); return peerB.hdrMedia; }), "HDR discovery extension was lost");
     auto accepted = Request(a, peerB, 1); Accept(b); const auto acceptedResult = accepted.get(); Check(acceptedResult.accepted, acceptedResult.error);
     std::this_thread::sleep_for(std::chrono::milliseconds(150)); Check(a.PollEvents().empty() && b.PollEvents().empty(), "Healthy session lost its heartbeat");
     Check(!a.RequestReceive(peerB, Token(1), 48730, 300, error), "Duplicate outbound session was accepted");

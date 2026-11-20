@@ -161,20 +161,20 @@ cudaVideoCodec VideoCodec(CodecId codec) {
     default: return cudaVideoCodec_NumCodecs;
     }
 }
-bool Supports(Driver& api, CodecId codec, uint32_t width, uint32_t height, CUVIDDECODECAPS* output = nullptr) {
+bool Supports(Driver& api, CodecId codec, uint32_t width, uint32_t height, bool hdr = false) {
     CUVIDDECODECAPS caps{};
     caps.eCodecType = VideoCodec(codec);
     caps.eChromaFormat = cudaVideoChromaFormat_420;
+    caps.nBitDepthMinus8 = hdr ? 2 : 0;
     if (api.cuvidGetDecoderCaps(&caps) != CUDA_SUCCESS || !caps.bIsSupported ||
-        !(caps.nOutputFormatMask & (1u << cudaVideoSurfaceFormat_NV12))) return false;
-    if (output) *output = caps;
+        !(caps.nOutputFormatMask & (1u << (hdr ? cudaVideoSurfaceFormat_P016 : cudaVideoSurfaceFormat_NV12)))) return false;
     return width >= caps.nMinWidth && width <= caps.nMaxWidth &&
         height >= caps.nMinHeight && height <= caps.nMaxHeight &&
         uint64_t((width + 15) / 16) * ((height + 15) / 16) <= caps.nMaxMBCount;
 }
 bool SameConfig(const CodecConfig& a, const CodecConfig& b) {
     return a.width == b.width && a.height == b.height && a.fps == b.fps &&
-        a.codec == b.codec && a.sequenceHeader == b.sequenceHeader;
+        a.codec == b.codec && a.hdr == b.hdr && a.sequenceHeader == b.sequenceHeader;
 }
 }
 
@@ -228,7 +228,7 @@ struct NvDecoder::Impl {
             }
             CUcontext candidate{};
             if (api.cuCtxCreate_v2(&candidate, CU_CTX_SCHED_BLOCKING_SYNC, device) != CUDA_SUCCESS) continue;
-            const bool supported = Supports(api, config.codec, config.width, (config.height + 1u) & ~1u);
+            const bool supported = Supports(api, config.codec, config.width, (config.height + 1u) & ~1u, config.hdr);
             CUcontext popped{};
             api.cuCtxPopCurrent_v2(&popped);
             if (supported) { context = candidate; break; }
@@ -239,10 +239,11 @@ struct NvDecoder::Impl {
         if (current.status != CUDA_SUCCESS) return CudaError(error, "cuCtxPushCurrent", current.status);
         if (adapter) {
             gpuOutput = std::make_unique<DecodedGpuOutput>();
-            if (!gpuOutput->Open(*adapter, config.width, config.height, error)) return false;
+            if (!gpuOutput->Open(*adapter, config.width, config.height, config.hdr, error)) return false;
             result = api.cuGraphicsD3D11RegisterResource(&gpuInput, gpuOutput->Input(), 0);
             if (result != CUDA_SUCCESS) return CudaError(error, "NVDEC D3D11 input registration", result);
         } else {
+        if (config.hdr) { error = "HDR decoding requires a DirectX output device"; return false; }
         if ((result = api.cuModuleLoadData(&module, ConvertPtx)) != CUDA_SUCCESS) return CudaError(error, "CUDA color converter JIT", result);
         if ((result = api.cuModuleGetFunction(&convert, module, "nv12_bgra")) != CUDA_SUCCESS) return CudaError(error, "cuModuleGetFunction", result);
         if ((result = api.cuMemAlloc_v2(&bgra, size_t(config.width) * config.height * 4)) != CUDA_SUCCESS) return CudaError(error, "cuMemAlloc BGRA", result);
@@ -290,12 +291,12 @@ struct NvDecoder::Impl {
     int Sequence(const CUVIDEOFORMAT& format) {
         const auto& signal = format.video_signal_description;
         const uint32_t height = (config.height + 1u) & ~1u;
-        const bool primaries = signal.color_primaries == 1 || signal.color_primaries == 2;
-        const bool transfer = signal.transfer_characteristics == 1 ||
+        const bool primaries = config.hdr ? signal.color_primaries == 9 : signal.color_primaries == 1 || signal.color_primaries == 2;
+        const bool transfer = config.hdr ? signal.transfer_characteristics == 16 : signal.transfer_characteristics == 1 ||
             signal.transfer_characteristics == 2 || signal.transfer_characteristics == 13;
-        const bool matrix = signal.matrix_coefficients == 1 || signal.matrix_coefficients == 2;
+        const bool matrix = config.hdr ? signal.matrix_coefficients == 9 : signal.matrix_coefficients == 1 || signal.matrix_coefficients == 2;
         if (format.codec != VideoCodec(config.codec) || !format.progressive_sequence ||
-            format.bit_depth_luma_minus8 || format.bit_depth_chroma_minus8 ||
+            format.bit_depth_luma_minus8 != (config.hdr ? 2 : 0) || format.bit_depth_chroma_minus8 != (config.hdr ? 2 : 0) ||
             format.chroma_format != cudaVideoChromaFormat_420 || signal.video_full_range_flag ||
             !primaries || !transfer || !matrix ||
             format.coded_width < config.width || format.coded_width > 4096 ||
@@ -304,8 +305,8 @@ struct NvDecoder::Impl {
             format.display_area.right != static_cast<int>(config.width) ||
             (format.display_area.bottom != static_cast<int>(height) && format.display_area.bottom != static_cast<int>(config.height)) ||
             !format.min_num_decode_surfaces || format.min_num_decode_surfaces > 32 ||
-            !Supports(api, config.codec, format.coded_width, format.coded_height)) {
-            callbackError = "NVDEC stream does not match the negotiated 8-bit SDR BT.709 NV12 image";
+            !Supports(api, config.codec, format.coded_width, format.coded_height, config.hdr)) {
+            callbackError = config.hdr ? "NVDEC expected a 10-bit BT.2020 PQ stream" : "NVDEC expected an 8-bit SDR BT.709 stream";
             return 0;
         }
         const uint32_t required = std::max(2u, uint32_t(format.min_num_decode_surfaces));
@@ -317,7 +318,8 @@ struct NvDecoder::Impl {
         CUVIDDECODECREATEINFO info{};
         info.CodecType = format.codec;
         info.ChromaFormat = format.chroma_format;
-        info.OutputFormat = cudaVideoSurfaceFormat_NV12;
+        info.bitDepthMinus8 = config.hdr ? 2 : 0;
+        info.OutputFormat = config.hdr ? cudaVideoSurfaceFormat_P016 : cudaVideoSurfaceFormat_NV12;
         info.DeinterlaceMode = cudaVideoDeinterlaceMode_Weave;
         info.ulWidth = info.ulMaxWidth = format.coded_width;
         info.ulHeight = info.ulMaxHeight = format.coded_height;
@@ -358,11 +360,12 @@ struct NvDecoder::Impl {
             if (result == CUDA_SUCCESS) {
                 CUdeviceptr pointer{}; size_t size{};
                 result = api.cuGraphicsResourceGetMappedPointer(&pointer, &size, gpuInput);
-                if (result == CUDA_SUCCESS && size < size_t(config.width) * surfaceHeight * 3 / 2) result = static_cast<CUresult>(1);
+                const unsigned rowBytes = config.width * (config.hdr ? 2 : 1);
+                if (result == CUDA_SUCCESS && size < size_t(rowBytes) * surfaceHeight * 3 / 2) result = static_cast<CUresult>(1);
                 if (result == CUDA_SUCCESS) {
                     CUDA_MEMCPY2D copy{}; copy.srcMemoryType = CU_MEMORYTYPE_DEVICE; copy.srcDevice = mapped.pointer; copy.srcPitch = pitch;
-                    copy.dstMemoryType = CU_MEMORYTYPE_DEVICE; copy.dstDevice = pointer; copy.dstPitch = config.width;
-                    copy.WidthInBytes = config.width; copy.Height = surfaceHeight * 3 / 2;
+                    copy.dstMemoryType = CU_MEMORYTYPE_DEVICE; copy.dstDevice = pointer; copy.dstPitch = rowBytes;
+                    copy.WidthInBytes = rowBytes; copy.Height = surfaceHeight * 3 / 2;
                     result = api.cuMemcpy2D_v2(&copy);
                 }
                 if (result != CUDA_SUCCESS) CudaError(callbackError, "NVDEC copy NV12 into D3D11", result);
@@ -387,20 +390,28 @@ struct NvDecoder::Impl {
 NvDecoder::NvDecoder(const LUID* adapter) : gpuOutput_(adapter != nullptr), outputAdapter_(adapter ? *adapter : LUID{}) {}
 NvDecoder::~NvDecoder() = default;
 
-uint32_t NvDecoder::Probe() {
+uint32_t NvDecoder::Probe(const LUID* adapter, bool includeHdr) {
     Driver api;
     std::string error;
     if (!api.Load(error)) return 0;
     int count{};
     if (api.cuDeviceGetCount(&count) != CUDA_SUCCESS) return 0;
     uint32_t supported{};
-    for (int index = 0; index < count && supported != 7; ++index) {
+    for (int index = 0; index < count; ++index) {
         CUdevice device{};
         CUcontext context{};
-        if (api.cuDeviceGet(&device, index) != CUDA_SUCCESS ||
-            api.cuCtxCreate_v2(&context, CU_CTX_SCHED_BLOCKING_SYNC, device) != CUDA_SUCCESS) continue;
-        for (const auto codec : { CodecId::H264, CodecId::Hevc, CodecId::Av1 })
-            if (Supports(api, codec, 3840, 2160)) supported |= CodecBit(codec);
+        if (api.cuDeviceGet(&device, index) != CUDA_SUCCESS) continue;
+        if (adapter) {
+            LUID actual{}; unsigned mask{};
+            if (api.cuDeviceGetLuid(reinterpret_cast<char*>(&actual), &mask, device) != CUDA_SUCCESS ||
+                actual.LowPart != adapter->LowPart || actual.HighPart != adapter->HighPart) continue;
+        }
+        if (api.cuCtxCreate_v2(&context, CU_CTX_SCHED_BLOCKING_SYNC, device) != CUDA_SUCCESS) continue;
+        for (const auto codec : { CodecId::H264, CodecId::Hevc, CodecId::Av1 }) {
+            if (!Supports(api, codec, 3840, 2160)) continue;
+            supported |= CodecBit(codec);
+            if (includeHdr && HdrCodecBit(codec) && Supports(api, codec, 3840, 2160, true)) supported |= HdrCodecBit(codec);
+        }
         CUcontext popped{};
         api.cuCtxPopCurrent_v2(&popped);
         api.cuCtxDestroy_v2(context);

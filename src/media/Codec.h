@@ -15,14 +15,17 @@ enum class CodecId : uint32_t { H264 = 0x48323634, Hevc = 0x48455643, Av1 = 0x41
 constexpr uint32_t CodecBit(CodecId codec) {
     return codec == CodecId::H264 ? 1u : codec == CodecId::Hevc ? 2u : codec == CodecId::Av1 ? 4u : 0u;
 }
+constexpr uint32_t HdrCodecBit(CodecId codec) { return codec == CodecId::H264 ? 0u : CodecBit(codec) << 3; }
+inline constexpr uint32_t DecoderCapsMask = 7u | HdrCodecBit(CodecId::Hevc) | HdrCodecBit(CodecId::Av1);
 const char* CodecName(CodecId codec);
 uint32_t HardwareEncodeCapabilities();
-uint32_t HardwareDecodeCapabilities();
+uint32_t HardwareDecodeCapabilities(const LUID* adapter = nullptr, bool includeHdr = false);
 struct CodecConfig {
     uint32_t width{}, height{}, fps{}, bitrate{};
     std::vector<uint8_t> sequenceHeader;
     CodecId codec{CodecId::H264};
     bool leftEyeOnly{}; // Encoder input crop only; wire content kind describes the result.
+    bool hdr{}; // 10-bit limited-range BT.2020 NCL / ST 2084.
 };
 struct EncodedFrame {
     CodecConfig config;

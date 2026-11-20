@@ -10,6 +10,7 @@ struct Peer {
     std::string id, name, address;
     uint16_t controlPort{};
     State state{State::Idle};
+    bool hdrMedia{};
 };
 struct DiscoveryTarget { std::string address; uint16_t port{}; };
 struct Config {

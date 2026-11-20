@@ -76,6 +76,7 @@ struct Options {
     uint16_t port{48730};
     bool pattern{}, list{}, noInject{}, stop{}, autoSource{}, recoverStream{}, noAudio{}, forceAudio{}, testAudio{}, profile{}, captureCpu{};
     int desktopMonitor{-1};
+    bool desktopCenter4k{};
     std::string bind{"0.0.0.0"};
     std::string codec{"software"}, gpu{"auto"};
     std::wstring capture;
@@ -109,6 +110,7 @@ void Help() {
         "  --launch EXE [--args TEXT]           Start or reuse an application and follow its LeiaSR process\n"
         "  --test-pattern                      Send an independent stereo test image\n"
         "  --desktop-monitor N                 Share an ordinary desktop monitor (0-based)\n"
+        "  --desktop-center-4k                 Capture only the central 3840x2160 desktop region\n"
         "  --auto-source                       Prefer foreground LeiaSR SBS on that monitor; otherwise desktop\n"
         "  --listen IPv4 --port 48730           Bind address (default 0.0.0.0)\n"
         "  --stream N --weave N                 Select weaver / weave ordinal; 0 = auto\n"
@@ -265,6 +267,7 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
         else if (a == L"--audio") o.forceAudio = true;
         else if (a == L"--test-audio") o.testAudio = true;
         else if (a == L"--gpu") o.gpu = Utf8(next());
+        else if (a == L"--desktop-center-4k") o.desktopCenter4k = true;
         else if (a == L"--profile") o.profile = true;
         else if (a == L"--capture-cpu") o.captureCpu = true;
         else if (a == L"--desktop-monitor") o.desktopMonitor = int(Number(next(), 128));
@@ -391,7 +394,8 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
     bool busActive{}, gpuBusActive{};
     bool requestGpu = !o.captureCpu && o.codec != "software";
     lan3d::DesktopCapture desktop;
-    if (o.desktopMonitor >= 0 && !desktop.Open(unsigned(o.desktopMonitor), error)) throw std::runtime_error(error);
+    if (o.desktopMonitor >= 0 && !desktop.Open(unsigned(o.desktopMonitor), error, o.desktopCenter4k)) throw std::runtime_error(error);
+    if (o.desktopMonitor >= 0) std::cout << "DESKTOP_REGION " << (o.desktopCenter4k ? "center-4k" : "full") << '\n';
     bool started = false;
     struct Stopper {
         Options& options; bool& started;
@@ -613,6 +617,8 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
         }
         if (!commonHardware && !o.bitrate) streamBitrate = lan3d::media::AdaptiveBitrate::Minimum;
         const bool connectionGpu = !o.captureCpu && commonHardware;
+        const uint32_t hdrCodecs = commonHardware & (peerHardware >> 3);
+        desktop.AllowHdr(connectionGpu && hdrCodecs);
         if (requestGpu != connectionGpu) {
             requestGpu = connectionGpu;
             if (started) {
@@ -660,7 +666,7 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
         uint64_t audioFramesSent{}, audioPacketsSent{}, testAudioEnd{};
         bool streamReady{};
         uint32_t encodedWidth{}, encodedHeight{};
-        bool encodedGpu{}, encodedLeft{}, receiverStereo{true};
+        bool encodedHdr{}, encodedGpu{}, encodedLeft{}, receiverStereo{true};
         uint32_t encodedSourceWidth{}, encodedSourceHeight{};
         LUID encodedAdapter{};
         lastGpuTimestamp = 0;
@@ -890,18 +896,24 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
             }
             const auto& frame = latestFrame;
             const bool leftOnly = frame.kind == lan3d::ContentKind::LeiaLeft;
-            if (frame.width != encodedWidth || frame.height != encodedHeight || encodedGpu != gpuReady || encodedLeft != leftOnly ||
+            const bool hdr = gpuReady && gpuFrame.kind == lan3d::ContentKind::Desktop && gpuFrame.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+            if (hdr != encodedHdr || frame.width != encodedWidth || frame.height != encodedHeight || encodedGpu != gpuReady || encodedLeft != leftOnly ||
                 (gpuReady && (gpuFrame.width != encodedSourceWidth || gpuFrame.height != encodedSourceHeight ||
                     gpuFrame.adapterLuid.LowPart != encodedAdapter.LowPart || gpuFrame.adapterLuid.HighPart != encodedAdapter.HighPart))) {
                 SenderProfile::Scope configureTiming(profile, SenderProfile::Configure);
                 bool configured{};
                 std::string failures;
                 for (const auto codec : {CodecId::Av1, CodecId::Hevc, CodecId::H264}) {
-                    if (!(commonHardware & lan3d::media::CodecBit(codec))) continue;
+                    if (!((hdr ? hdrCodecs : commonHardware) & lan3d::media::CodecBit(codec))) continue;
                     lan3d::media::CodecConfig config{frame.width, frame.height, streamFps, streamBitrate, {}, codec};
+                    config.hdr = hdr;
                     config.leftEyeOnly = gpuReady && leftOnly;
                     if (gpuReady ? encoder.ConfigureGpu(config, gpuFrame, error, explicitGpu ? &selectedGpu : nullptr) : encoder.Configure(config, true, error)) { configured = true; break; }
                     failures += std::string(lan3d::media::CodecName(codec)) + ": " + error + "; ";
+                }
+                if (!configured && hdr) {
+                    std::cout << "HDR_FALLBACK using SDR: " << failures << '\n' << std::flush;
+                    desktop.AllowHdr(false); encodedWidth = 0; continue;
                 }
                 if (!configured && gpuReady) { if (gpuLease) releaseGpu(gpuLease); gpuLease = 0; throw std::runtime_error(failures); }
                 if (!configured && commonHardware && o.captureCpu && (o.codec == "auto" || o.codec == "h264")) {
@@ -920,13 +932,14 @@ int lan3d::RunSender(int argc, wchar_t** argv) try {
                 }
                 if (!commonHardware) configured = encoder.Configure(frame.width, frame.height, streamFps, streamBitrate, error);
                 if (!configured) throw std::runtime_error(failures.empty() ? error : failures);
-                encodedWidth = frame.width; encodedHeight = frame.height; encodedGpu = gpuReady; encodedLeft = leftOnly;
+                encodedHdr = hdr; encodedWidth = frame.width; encodedHeight = frame.height; encodedGpu = gpuReady; encodedLeft = leftOnly;
                 if (gpuReady) { encodedSourceWidth = gpuFrame.width; encodedSourceHeight = gpuFrame.height; encodedAdapter = gpuFrame.adapterLuid; }
                 if (!encoder.RequestKeyFrame(error)) throw std::runtime_error(error);
                 std::cout << "ENCODER " << (encoder.hardware() ? "NVENC " : "Software ") << lan3d::media::CodecName(encoder.config().codec) << ' '
                     << (frame.kind == lan3d::ContentKind::LeiaSbs ? "SBS " : leftOnly ? "LeftEye " : "Desktop ") << frame.width << 'x' << frame.height
                     << " target=" << streamFps << "fps/" << streamBitrate / 1000000 << "Mbps";
                 if (gpuReady) std::cout << " gpu_shared=1";
+                if (hdr) std::cout << " HDR10 PQ BT.2020 10-bit";
                 if (frame.kind == lan3d::ContentKind::LeiaSbs) std::cout << " (each eye " << frame.width / 2 << 'x' << frame.height << ')';
                 std::cout << '\n' << std::flush;
                 if (!o.bitrate) {

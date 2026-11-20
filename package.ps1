@@ -6,7 +6,7 @@ Set-StrictMode -Version 2.0
 $workspace = [IO.Path]::GetFullPath($PSScriptRoot)
 . (Join-Path $workspace 'scripts\Verify-SymbolPair.ps1')
 
-$version = '0.8.3'
+$version = '0.8.4'
 $baseName = "LAN3DShare-$version"
 $productionNames = @('LAN3DShare.exe', 'LAN3DCapture.dll')
 $buildRoot = [IO.Path]::GetFullPath((Join-Path $workspace $BuildDirectory))

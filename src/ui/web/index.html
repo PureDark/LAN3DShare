@@ -214,6 +214,7 @@ kbd { font: 600 10.5px/1 "Segoe UI", sans-serif; padding: 3px 6px; border-radius
 .q-chip.on .chev { transform: rotate(180deg); color: var(--accent); }
 .qpop {
   position: absolute; right: 32px; bottom: 70px; width: 384px; z-index: 5; padding: 18px 18px 14px;
+  max-height: calc(100% - 115px); overflow-y: auto;
   background: var(--surface); border-radius: 16px;
   box-shadow: 0 0 0 1px rgba(16, 24, 40, .08), 0 22px 44px -14px rgba(16, 24, 40, .3);
 }
@@ -528,6 +529,13 @@ button:disabled { cursor: default; } .ghost:disabled { opacity: .55; }
       <button id="q-reset">恢复默认</button>
     </div>
     <div class="q-sec">
+      <div class="q-row">屏幕范围<span>小屏不放大；LeiaSR 双眼画面保持完整</span></div>
+      <div class="seg" data-key="region">
+        <button data-v="full">整个屏幕</button>
+        <button data-v="center4k">中央 4K</button>
+      </div>
+    </div>
+    <div class="q-sec">
       <div class="q-row">分辨率<span>上限，保持比例，不放大原画面</span></div>
       <div class="seg" data-key="res">
         <button data-v="720p">720p</button>
@@ -661,7 +669,7 @@ const icons = {
 const ic3d = '<svg class="i sm" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>';
 const scene = (dx, fit) => `<svg viewBox="0 0 160 90" preserveAspectRatio="${fit}"><use href="#sky"/><use href="#far" x="${dx * .4}"/><use href="#near" x="${dx}"/></svg>`;
 const pattern = (dx, fit) => `<svg viewBox="0 0 160 90" preserveAspectRatio="${fit}"><use href="#grid"/><use href="#target" x="${dx}"/></svg>`;
-const qualityDefault = { res: '4k', fps: 60, rate: 200, codec: 'auto' };
+const qualityDefault = { res: '4k', fps: 60, rate: 200, codec: 'auto', region: 'full' };
 const codecLabels = { auto: '自动', av1: 'AV1', h264: 'H.264', hevc: 'HEVC' };
 const resolutionLabels = { '720p': '720p', '1080p': '1080p', '2k': '2K', '4k': '4K' };
 const rateHints = {
@@ -794,7 +802,7 @@ function renderQuality() {
   const quality = model.quality || qualityDefault;
   const rate = Number(quality.rate) || 0;
   const rateLabel = rate === 0 ? '自动' : `${rate} Mbps`;
-  text('#q-summary', `${resolutionLabels[quality.res] || quality.res} · ${quality.fps} FPS · ${rateLabel} · ${codecLabels[quality.codec] || '自动'}`);
+  text('#q-summary', `${quality.region === 'center4k' ? '中央 4K · ' : ''}${resolutionLabels[quality.res] || quality.res} · ${quality.fps} FPS · ${rateLabel} · ${codecLabels[quality.codec] || '自动'}`);
   text('#q-rate-hint', rate === 0 ? '根据局域网带宽自动调整码率' : rateHints[rate] || (rate > 400 ? '更高画质，请确保局域网有足够带宽余量' : '手动码率，最低 20 Mbps'));
   text('#rate-value', rateLabel);
   $('#rate-slider').value = rate;
@@ -1118,7 +1126,7 @@ $$('.seg').forEach(segment => segment.onclick = event => {
   const button = event.target.closest('[data-v]');
   if (!button || !isIdle()) return;
   const key = segment.dataset.key;
-  const value = key === 'res' || key === 'codec' ? button.dataset.v : Number(button.dataset.v);
+  const value = key === 'res' || key === 'codec' || key === 'region' ? button.dataset.v : Number(button.dataset.v);
   model.quality = { ...model.quality, [key]: value };
   renderQuality();
   post('quality', { [key]: value });

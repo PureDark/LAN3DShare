@@ -9,6 +9,8 @@
 #include <vector>
 #include <set>
 #include <cstring>
+#include <future>
+#include <thread>
 
 using Microsoft::WRL::ComPtr;
 using lan3d::capture::Core;
@@ -207,6 +209,18 @@ public:
 };
 
 void Test12() {
+    {
+        Core idle([](const auto&) {}, [](const auto&) {});
+        std::promise<void> completed; auto done = completed.get_future();
+        std::thread release;
+        bool returned{};
+        idle.Execute12(nullptr, 0, nullptr, [&] {
+            release = std::thread([&] { idle.ForgetList12(nullptr); completed.set_value(); });
+            returned = done.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+        });
+        release.join();
+        Check(returned, "Untracked queue submission held capture lock while another host thread released an object");
+    }
     ComPtr<ID3D12Debug> debug; Hr(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)), "DX12 debug-layer unavailable"); debug->EnableDebugLayer();
     ComPtr<IDXGIFactory4> factory; Hr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "factory"); ComPtr<IDXGIAdapter> adapter; Hr(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)), "WARP adapter");
     ComPtr<ID3D12Device> device; Hr(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)), "DX12 WARP device");
@@ -355,7 +369,29 @@ void Test12() {
         Check(gpuFrames.empty(), "DX12 published a recording which could still be re-executed");
         gpu.Execute12(queue.Get(), 1, commandLists, [&] { queue->ExecuteCommandLists(1, commandLists); }); Wait12(device.Get(), queue.Get()); gpu.Poll12();
         Check(gpuFrames.empty(), "DX12 re-execution bypassed retirement requirement");
-        reset(allocator.Get()); Check(gpuFrames.size() == 1, "DX12 retired GPU texture was not published");
+        // The old fence is already complete. Retire the recording from another
+        // thread while an outer submission is still inside the next hook.
+        // Neither nested Execute nor Reset/Poll may publish through that gap.
+        std::promise<void> completed; auto done = completed.get_future();
+        std::thread retirement; bool returned{}, held{}; std::exception_ptr failure;
+        gpu.Execute12(queue.Get(), 1, commandLists, [&] {
+            gpu.Execute12(queue.Get(), 1, commandLists, [&] { queue->ExecuteCommandLists(1, commandLists); });
+            Wait12(device.Get(), queue.Get());
+            retirement = std::thread([&] {
+                try {
+                    gpu.ForgetList12(nullptr);
+                    reset(allocator.Get()); gpu.Poll12();
+                    held = gpuFrames.empty() && gpu.GetDiagnostics12().retiredSlots == 1;
+                } catch (...) { failure = std::current_exception(); }
+                completed.set_value();
+            });
+            returned = done.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+        });
+        retirement.join();
+        if (failure) std::rethrow_exception(failure);
+        Check(returned && held, "Tracked submission blocked host callbacks or exposed a texture before the outer submission returned");
+        Wait12(device.Get(), queue.Get()); gpu.Poll12();
+        Check(gpuFrames.size() == 1, "DX12 retired GPU texture was not published after all submissions completed");
         CheckGpuPixels(consumer.Get(), consumerContext.Get(), gpuFrames[0], 207, 34);
         // A second capture must not overwrite the first consumer's outstanding
         // lease. Even Reset cannot publish while its queue fence is incomplete.
@@ -387,4 +423,54 @@ void Test12() {
     Debug12(device.Get()); std::cout << "DX12: unknown-state rejection, copy/state restoration, GPU-gated publish, in-flight Reset retirement, repeated Execute lifetime, debug layer PASS\n";
     std::cout << "DX12 GPU: shared texture opened on DX11, exact pixels, Reset+fence publication, re-execution exclusion, consumer lease and pooled reuse, no CPU callback PASS\n";
 }
-int main() { try { Test11(); Test12(); return 0; } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; } }
+void TestFloat12() {
+    ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter> adapter;
+    Hr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "FP16 factory"); Hr(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter)), "FP16 WARP");
+    ComPtr<ID3D12Device> device; Hr(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)), "FP16 device");
+    ComPtr<ID3D12CommandQueue> queue; D3D12_COMMAND_QUEUE_DESC q{};
+    Hr(device->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "FP16 queue");
+    ComPtr<ID3D12CommandAllocator> allocator; ComPtr<ID3D12GraphicsCommandList> list;
+    Hr(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "FP16 allocator");
+    Hr(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list)), "FP16 list");
+    D3D12_RESOURCE_DESC d{}; d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; d.Width = 16; d.Height = 8;
+    d.DepthOrArraySize = d.MipLevels = 1; d.SampleDesc.Count = 1; d.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; d.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    ComPtr<ID3D12Resource> input; Hr(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d,
+        D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&input)), "FP16 input");
+    D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 1;
+    ComPtr<ID3D12DescriptorHeap> rtvs; Hr(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvs)), "FP16 RTV heap");
+    const auto rtv = rtvs->GetCPUDescriptorHandleForHeapStart(); device->CreateRenderTargetView(input.Get(), nullptr, rtv);
+    std::vector<lan3d::GpuFrame> frames; bool released{}; std::string status;
+    Core core([](const auto&) { throw std::runtime_error("FP16 used CPU pixels"); }, [&](const auto& s) { status = s; });
+    lan3d::CaptureConfig config; config.maxFps = 0; config.reserved = lan3d::CaptureGpuOutput;
+    core.Configure(config); core.SetGpuOutput([&](const auto& f) { frames.push_back(f); return true; }, [&](auto) { return released; });
+    core.SetEnabled(true); int key{}; const auto window = reinterpret_cast<HWND>(0x5678);
+    core.Register(&key, window, true); core.Input12(&key, input.Get(), d.Format); core.CommandList12(&key, list.Get());
+    Hr(list->Close(), "FP16 initial close"); ID3D12CommandList* lists[]{list.Get()};
+    core.Execute12(queue.Get(), 1, lists, [&] { queue->ExecuteCommandLists(1, lists); }); Wait12(device.Get(), queue.Get());
+    Hr(allocator->Reset(), "FP16 initial allocator reset"); Hr(list->Reset(allocator.Get(), nullptr), "FP16 initial reset"); core.Reset12(list.Get());
+    const float color[]{0.25f, 0.5f, 0.75f, 1.f}; list->ClearRenderTargetView(rtv, color, 0, nullptr);
+    D3D12_RESOURCE_BARRIER barrier{}; barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition = {input.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+    list->ResourceBarrier(1, &barrier); core.Barrier12(list.Get(), 1, &barrier);
+    core.BeforeWeave(&key); Hr(list->Close(), "FP16 capture close");
+    core.Execute12(queue.Get(), 1, lists, [&] { queue->ExecuteCommandLists(1, lists); }); core.Present(window); Wait12(device.Get(), queue.Get());
+    Hr(allocator->Reset(), "FP16 retirement allocator reset"); Hr(list->Reset(allocator.Get(), nullptr), "FP16 retirement reset"); core.Reset12(list.Get()); core.Poll12();
+    Check(frames.size() == 1 && frames[0].format == d.Format && lan3d::ValidGpuFrame(frames[0]), "FP16 capture missing or format lost");
+    ComPtr<ID3D11Device> consumer; ComPtr<ID3D11DeviceContext> context; ComPtr<ID3D11Device1> consumer1;
+    Hr(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_DEBUG, nullptr, 0,
+        D3D11_SDK_VERSION, &consumer, nullptr, &context), "FP16 consumer"); Hr(consumer.As(&consumer1), "FP16 consumer1");
+    ComPtr<ID3D11Texture2D> shared, staging;
+    Hr(consumer1->OpenSharedResourceByName(frames[0].textureName, DXGI_SHARED_RESOURCE_READ, IID_PPV_ARGS(&shared)), "FP16 shared open");
+    D3D11_TEXTURE2D_DESC desc{}; shared->GetDesc(&desc); desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = desc.MiscFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    Hr(consumer->CreateTexture2D(&desc, nullptr, &staging), "FP16 test readback"); context->CopyResource(staging.Get(), shared.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{}; Hr(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "FP16 test map");
+    bool valid = true;
+    for (UINT y = 0; y < desc.Height; ++y) for (UINT x = 0; x < desc.Width; ++x) {
+        const auto p = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(mapped.pData) + y * mapped.RowPitch) + x * 4;
+        valid &= p[0] == 0x3400 && p[1] == 0x3800 && p[2] == 0x3a00 && p[3] == 0x3c00;
+    }
+    context->Unmap(staging.Get(), 0); Check(valid, "FP16 shared pixels were altered");
+    released = true; core.Poll12(); Hr(list->Close(), "FP16 empty close"); Debug11(consumer.Get()); Debug12(device.Get());
+}
+int main() { try { Test11(); Test12(); TestFloat12(); return 0; } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; } }

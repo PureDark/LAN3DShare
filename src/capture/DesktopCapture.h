@@ -15,7 +15,7 @@ public:
     ~DesktopCapture();
     DesktopCapture(const DesktopCapture&) = delete;
     DesktopCapture& operator=(const DesktopCapture&) = delete;
-    bool Open(unsigned monitorIndex, std::string& error);
+    bool Open(unsigned monitorIndex, std::string& error, bool center4k = false);
     DesktopCaptureResult Capture(Frame& frame, std::string& error);
     // Returned texture is retained until the next CaptureGpu/RequestRefresh/Close.
     // The caller must finish GPU reads before any of those calls (NVENC sync completion).
@@ -26,6 +26,7 @@ public:
     // Request a current snapshot even if no new desktop Present has occurred.
     // The next Capture uses the same non-waiting recovery/retry path.
     void RequestRefresh();
+    void AllowHdr(bool enabled);
     void Close();
 private:
     DesktopCaptureResult CaptureInternal(Frame* cpu, GpuFrame* gpu, std::string& error);

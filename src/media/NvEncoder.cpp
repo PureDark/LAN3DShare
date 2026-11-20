@@ -4,6 +4,7 @@
 #include "../../third_party/nvcodec/nvEncodeAPI.h"
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
+#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <algorithm>
 #include <cstdio>
@@ -27,14 +28,14 @@ const GUID& CodecGuid(CodecId codec) {
     if (codec == CodecId::Hevc) return NV_ENC_CODEC_HEVC_GUID;
     return NV_ENC_CODEC_H264_GUID;
 }
-void SetVui(NV_ENC_CONFIG_H264_VUI_PARAMETERS& vui) {
+void SetVui(NV_ENC_CONFIG_H264_VUI_PARAMETERS& vui, bool hdr = false) {
     vui.videoSignalTypePresentFlag = 1;
     vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
     vui.videoFullRangeFlag = 0;
     vui.colourDescriptionPresentFlag = 1;
-    vui.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-    vui.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SRGB;
-    vui.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+    vui.colourPrimaries = hdr ? NV_ENC_VUI_COLOR_PRIMARIES_BT2020 : NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+    vui.transferCharacteristics = hdr ? NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084 : NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SRGB;
+    vui.colourMatrix = hdr ? NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL : NV_ENC_VUI_MATRIX_COEFFS_BT709;
 }
 }
 
@@ -68,7 +69,12 @@ struct NvEncoder::Impl {
     struct SharedInput {
         ComPtr<ID3D11Texture2D> texture;
         ComPtr<ID3D11VideoProcessorInputView> view;
+        ComPtr<ID3D11ShaderResourceView> floatView;
     };
+    ComPtr<ID3D11ComputeShader> floatShader;
+    ComPtr<ID3D11Texture2D> floatUnorm;
+    ComPtr<ID3D11UnorderedAccessView> floatOutput;
+    ComPtr<ID3D11VideoProcessorInputView> floatVideoView;
     std::map<std::wstring, SharedInput> sharedInputs;
     ComPtr<ID3D11VideoProcessorEnumerator> previewEnumerator;
     ComPtr<ID3D11VideoProcessor> previewProcessor;
@@ -106,6 +112,7 @@ struct NvEncoder::Impl {
         session = nullptr; registered = nullptr; mapped = nullptr; bitstream = nullptr;
         initialized = false; locked = false; forceKeyframe = true; frameIndex = 0; codedHeight = 0;
         sharedInputs.clear();
+        floatShader.Reset(); floatUnorm.Reset(); floatOutput.Reset(); floatVideoView.Reset();
         previewInput.Reset(); previewOutput.Reset(); previewProcessor.Reset(); previewEnumerator.Reset();
         previewTexture.Reset(); previewReadback.Reset();
         latestMetadata = {}; previewMetadata = {}; lastPreview = 0; previewPending = false;
@@ -196,8 +203,11 @@ struct NvEncoder::Impl {
         return false;
     }
     bool EnsureProcessor(uint32_t inputWidth, uint32_t inputHeight, DXGI_FORMAT inputFormat, std::string& error) {
+        // Only explicitly negotiated desktop HDR is scRGB. Float SBS remains display-encoded SDR.
+        if (inputFormat == DXGI_FORMAT_R16G16B16A16_FLOAT) inputFormat = config.hdr ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
         if (processor && processorWidth == inputWidth && processorHeight == inputHeight && processorFormat == inputFormat) return true;
         inputView.Reset(); outputView.Reset(); processor.Reset(); enumerator.Reset();
+        floatVideoView.Reset();
         for (auto& [name, input] : sharedInputs) input.view.Reset();
         HRESULT hr{};
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC desc{};
@@ -211,7 +221,7 @@ struct NvEncoder::Impl {
             return HrError(error, "create RGB/NV12 video enumerator", hr);
         UINT inputSupport{}, outputSupport{};
         enumerator->CheckVideoProcessorFormat(inputFormat, &inputSupport);
-        enumerator->CheckVideoProcessorFormat(DXGI_FORMAT_NV12, &outputSupport);
+        enumerator->CheckVideoProcessorFormat(config.hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12, &outputSupport);
         if (!(inputSupport & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) ||
             !(outputSupport & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT)) {
             error = "NVIDIA D3D11 video processor does not support the source format to NV12 conversion";
@@ -232,9 +242,10 @@ struct NvEncoder::Impl {
         videoContext->VideoProcessorSetOutputTargetRect(processor.Get(), TRUE, &outputRect);
         ComPtr<ID3D11VideoContext1> video1;
         if (SUCCEEDED(videoContext.As(&video1))) {
-            video1->VideoProcessorSetStreamColorSpace1(processor.Get(), 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
-            video1->VideoProcessorSetOutputColorSpace1(processor.Get(), DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+            video1->VideoProcessorSetStreamColorSpace1(processor.Get(), 0, config.hdr ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            video1->VideoProcessorSetOutputColorSpace1(processor.Get(), config.hdr ? DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
         } else {
+            if (config.hdr) { error = "HDR encoding requires D3D11 video color-space support"; return false; }
             D3D11_VIDEO_PROCESSOR_COLOR_SPACE rgb{}, yuv{};
             rgb.Nominal_Range = 2; // full 0..255
             yuv.YCbCr_Matrix = 1; yuv.Nominal_Range = 1; // BT.709 studio 16..235
@@ -244,6 +255,55 @@ struct NvEncoder::Impl {
         processorWidth = inputWidth; processorHeight = inputHeight; processorFormat = inputFormat;
         return true;
     }
+    bool ConvertFloat(SharedInput& input, uint32_t width, uint32_t height, std::string& error) {
+        HRESULT hr{};
+        if (!floatShader) {
+            constexpr char hdrShader[] = R"(
+                Texture2D<float4> src : register(t0);
+                RWTexture2D<unorm float4> dst : register(u0);
+                [numthreads(8,8,1)] void main(uint3 p : SV_DispatchThreadID) {
+                    uint w,h; dst.GetDimensions(w,h); if(p.x >= w || p.y >= h) return;
+                    float3 rgb = src.Load(int3(p.xy,0)).rgb;
+                    float3 wide = mul(float3x3(.627404,.329283,.043313, .069097,.919540,.011362, .016391,.088013,.895595), rgb);
+                    // scRGB 1.0 = 80 nits. ST 2084 uses a 10000-nit reference.
+                    float3 l = pow(saturate(wide * .008), 2610.0/16384);
+                    dst[p.xy] = float4(pow((.8359375 + 18.8515625*l) / (1 + 18.6875*l), 2523.0/32), 1);
+                })";
+            constexpr char shader[] =
+                "Texture2D<float4> src:register(t0); RWTexture2D<unorm float4> dst:register(u0);"
+                "[numthreads(8,8,1)] void main(uint3 p:SV_DispatchThreadID) {"
+                "uint w,h; dst.GetDimensions(w,h); if(p.x<w && p.y<h) dst[p.xy]=saturate(src.Load(int3(p.xy,0))); }";
+            ComPtr<ID3DBlob> code, diagnostics;
+            if (FAILED(hr = D3DCompile(config.hdr ? hdrShader : shader, config.hdr ? sizeof(hdrShader)-1 : sizeof(shader)-1, nullptr, nullptr, nullptr, "main", "cs_5_0",
+                D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &diagnostics))) return HrError(error, "compile FP16 color conversion", hr);
+            if (FAILED(hr = device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &floatShader)))
+                return HrError(error, "create FP16 color conversion", hr);
+        }
+        D3D11_TEXTURE2D_DESC desc{}; if (floatUnorm) floatUnorm->GetDesc(&desc);
+        if (!floatUnorm || desc.Width != width || desc.Height != height) {
+            floatVideoView.Reset(); floatOutput.Reset(); floatUnorm.Reset();
+            desc = {}; desc.Width = width; desc.Height = height; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+            desc.Format = config.hdr ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM; desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
+            if (FAILED(hr = device->CreateTexture2D(&desc, nullptr, &floatUnorm))) return HrError(error, "create FP16 conversion target", hr);
+        }
+        if (!floatOutput && FAILED(hr = device->CreateUnorderedAccessView(floatUnorm.Get(), nullptr, &floatOutput)))
+            return HrError(error, "create FP16 conversion UAV", hr);
+        if (!input.floatView && FAILED(hr = device->CreateShaderResourceView(input.texture.Get(), nullptr, &input.floatView)))
+            return HrError(error, "create FP16 input SRV", hr);
+        if (!floatVideoView) {
+            D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC view{}; view.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+            if (FAILED(hr = videoDevice->CreateVideoProcessorInputView(floatUnorm.Get(), enumerator.Get(), &view, &floatVideoView)))
+                return HrError(error, "create converted video input", hr);
+        }
+        context->CSSetShader(floatShader.Get(), nullptr, 0);
+        context->CSSetShaderResources(0, 1, input.floatView.GetAddressOf());
+        context->CSSetUnorderedAccessViews(0, 1, floatOutput.GetAddressOf(), nullptr);
+        context->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+        ID3D11ShaderResourceView* noInput{}; ID3D11UnorderedAccessView* noOutput{};
+        context->CSSetShaderResources(0, 1, &noInput); context->CSSetUnorderedAccessViews(0, 1, &noOutput, nullptr);
+        context->CSSetShader(nullptr, nullptr, 0);
+        return true;
+    }
     bool ConvertResources(std::string& error) {
         HRESULT hr = device.As(&videoDevice);
         if (FAILED(hr)) return HrError(error, "D3D11 video device", hr);
@@ -251,7 +311,7 @@ struct NvEncoder::Impl {
         D3D11_TEXTURE2D_DESC tex{};
         tex.Width = config.width; tex.Height = codedHeight; tex.MipLevels = 1; tex.ArraySize = 1;
         tex.SampleDesc.Count = 1; tex.Usage = D3D11_USAGE_DEFAULT;
-        tex.Format = DXGI_FORMAT_NV12; tex.BindFlags = D3D11_BIND_RENDER_TARGET;
+        tex.Format = config.hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12; tex.BindFlags = D3D11_BIND_RENDER_TARGET;
         if (FAILED(hr = device->CreateTexture2D(&tex, nullptr, &nv12))) return HrError(error, "create NV12 encode texture", hr);
         if (gpuInput) return true; // No upload texture or CPU image allocation.
         tex.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -295,7 +355,7 @@ struct NvEncoder::Impl {
         videoContext->VideoProcessorSetOutputTargetRect(previewProcessor.Get(), TRUE, &target);
         ComPtr<ID3D11VideoContext1> video1;
         if (FAILED(videoContext.As(&video1))) return false;
-        video1->VideoProcessorSetStreamColorSpace1(previewProcessor.Get(), 0, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+        video1->VideoProcessorSetStreamColorSpace1(previewProcessor.Get(), 0, config.hdr ? DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
         video1->VideoProcessorSetOutputColorSpace1(previewProcessor.Get(), DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
         previewMetadata.width = width; previewMetadata.height = height; previewMetadata.stride = width * 4;
         return true;
@@ -340,21 +400,21 @@ struct NvEncoder::Impl {
             auto& av1 = settings.encodeCodecConfig.av1Config;
             av1.idrPeriod = settings.gopLength;
             av1.chromaFormatIDC = 1;
-            av1.inputBitDepth = av1.outputBitDepth = NV_ENC_BIT_DEPTH_8;
+            av1.inputBitDepth = av1.outputBitDepth = config.hdr ? NV_ENC_BIT_DEPTH_10 : NV_ENC_BIT_DEPTH_8;
             av1.repeatSeqHdr = 1; av1.disableSeqHdr = 0; av1.outputAnnexBFormat = 0;
             av1.enableBitstreamPadding = 0;
-            av1.colorPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-            av1.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SRGB;
-            av1.matrixCoefficients = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+            av1.colorPrimaries = config.hdr ? NV_ENC_VUI_COLOR_PRIMARIES_BT2020 : NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+            av1.transferCharacteristics = config.hdr ? NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084 : NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SRGB;
+            av1.matrixCoefficients = config.hdr ? NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL : NV_ENC_VUI_MATRIX_COEFFS_BT709;
             av1.colorRange = 0;
         } else if (config.codec == CodecId::Hevc) {
-            settings.profileGUID = NV_ENC_HEVC_PROFILE_MAIN_GUID;
+            settings.profileGUID = config.hdr ? NV_ENC_HEVC_PROFILE_MAIN10_GUID : NV_ENC_HEVC_PROFILE_MAIN_GUID;
             auto& hevc = settings.encodeCodecConfig.hevcConfig;
             hevc.idrPeriod = settings.gopLength;
             hevc.chromaFormatIDC = 1;
-            hevc.inputBitDepth = hevc.outputBitDepth = NV_ENC_BIT_DEPTH_8;
+            hevc.inputBitDepth = hevc.outputBitDepth = config.hdr ? NV_ENC_BIT_DEPTH_10 : NV_ENC_BIT_DEPTH_8;
             hevc.repeatSPSPPS = 1; hevc.disableSPSPPS = 0;
-            SetVui(hevc.hevcVUIParameters);
+            SetVui(hevc.hevcVUIParameters, config.hdr);
         } else {
             settings.profileGUID = NV_ENC_H264_PROFILE_HIGH_GUID;
             auto& h264 = settings.encodeCodecConfig.h264Config;
@@ -451,7 +511,7 @@ struct NvEncoder::Impl {
         resource.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
         resource.width = config.width; resource.height = codedHeight;
         resource.resourceToRegister = nv12.Get();
-        resource.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+        resource.bufferFormat = config.hdr ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
         resource.bufferUsage = NV_ENC_INPUT_IMAGE;
         status = api.nvEncRegisterResource(session, &resource);
         if (status != NV_ENC_SUCCESS) return NvError(error, "register NV12 NVIDIA encode resource", status);
@@ -499,7 +559,7 @@ bool NvEncoder::Configure(const CodecConfig& config, std::string& error) {
     error.clear();
     auto& p = *impl_;
     p.Reset();
-    if (!ValidConfig(config) || !CodecBit(config.codec)) {
+    if (!ValidConfig(config) || config.hdr || !CodecBit(config.codec)) {
         error = "Invalid NVIDIA video encode configuration";
         return false;
     }
@@ -513,7 +573,7 @@ bool NvEncoder::ConfigureGpu(const CodecConfig& config, const GpuFrame& input, s
     error.clear();
     auto& p = *impl_;
     p.Reset();
-    if (!ValidConfig(config) || !ValidGpuFrame(input) || (config.leftEyeOnly && input.kind != ContentKind::LeiaSbs)) {
+    if (!ValidConfig(config) || !ValidGpuFrame(input) || (config.hdr && (input.kind != ContentKind::Desktop || input.format != DXGI_FORMAT_R16G16B16A16_FLOAT)) || (config.leftEyeOnly && input.kind != ContentKind::LeiaSbs)) {
         error = "Invalid NVIDIA shared GPU input configuration";
         return false;
     }
@@ -634,14 +694,17 @@ bool NvEncoder::EncodeGpu(const GpuFrame& frame, std::vector<EncodedFrame>& pack
         return false;
     }
     HRESULT hr{};
-    if (!input.view) {
+    const bool floating = frame.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+    if (floating) {
+        if (!p.ConvertFloat(input, frame.width, frame.height, error)) return false;
+    } else if (!input.view) {
         D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC view{};
         view.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
         if (FAILED(hr = p.videoDevice->CreateVideoProcessorInputView(input.texture.Get(), p.enumerator.Get(), &view, &input.view)))
             return HrError(error, "create shared GPU video input view", hr);
     }
     D3D11_VIDEO_PROCESSOR_STREAM stream{};
-    stream.Enable = TRUE; stream.pInputSurface = input.view.Get();
+    stream.Enable = TRUE; stream.pInputSurface = floating ? p.floatVideoView.Get() : input.view.Get();
     hr = p.videoContext->VideoProcessorBlt(p.processor.Get(), p.outputView.Get(), p.frameIndex, 1, &stream);
     if (FAILED(hr)) return HrError(error, "GPU capture scaling and NV12 conversion", hr);
     // NVENC consumes the converted texture on this same D3D11 device. Its

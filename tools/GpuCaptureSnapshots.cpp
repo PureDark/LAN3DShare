@@ -67,6 +67,8 @@ class Reader {
 public:
     Frame Read(const GpuFrame& input, Lease& lease) {
         if (!ValidGpuFrame(input)) throw std::runtime_error("Invalid GPU mailbox metadata");
+        if (input.format != DXGI_FORMAT_R8G8B8A8_UNORM && input.format != DXGI_FORMAT_B8G8R8A8_UNORM)
+            throw std::runtime_error("Raw PNG snapshots require RGBA8/BGRA8; FP16 needs GPU SDR conversion before readback");
         if (!device || luid.LowPart != input.adapterLuid.LowPart || luid.HighPart != input.adapterLuid.HighPart) {
             staging.Reset(); context.Reset(); device.Reset();
             ComPtr<IDXGIFactory1> factory;

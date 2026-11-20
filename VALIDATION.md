@@ -1,4 +1,24 @@
-# LAN3DShare 0.8.3 验证记录
+# LAN3DShare 0.8.4 验证记录
+
+## 0.8.4 桌面 HDR 与中央 4K
+
+本机用 7680×2160 HDR 桌面、中央 3840×2160、60 FPS 目标和 334 Mbps 做回环。AV1 HDR 和 HEVC HDR 分别解码 654 和 658 帧，接收端均使用 NVDEC 和 FP16 scRGB 交换链。与 0.8.3 接收端连接时发送端执行 SDR 转换，接收端解码 659 帧。三次平均发送帧率约 58 FPS。未在两台电脑之间验证 HDR 显示效果。
+
+PeerService、DesktopCapture、SessionTransport 和 MediaTransport 测试通过。NvEncoderHdr 的高光像素回读测试失败，已列入本版已知问题。生成 10 位码流和成功解码不能证明色彩准确。
+
+## PBZ 热附加死锁（2026-11-04）
+
+在用户开启 LeiaSR 的 PBZ 进程中分阶段接入，LoadLibraryW、LAN3DSetGpuHooks、LAN3DConfigure 均返回，LAN3DStart 超时。线程栈显示：PD NR FG Present consumer 在 Core::Execute12 持有采集锁时进入 Mod 的 CommandsSubmitted 并等待其锁；RHIThread 在 Mod 的 BeforeEvaluate/MakeTexture 路径释放对象，反向等待 Core::ForgetList12 的采集锁；启动线程也等待同一采集锁。证据为 `build-opt/test-results/pbz-live/bootstrap.stdout.log`、`bootstrap.stderr.log` 和 `threads.txt`。这是队列提交钩子的锁互等，不能归因于网络或采集线程选错。
+
+修复保留 weave 调用线程上的交织前 GPU 采集，在调用下一层 ExecuteCommandLists 钩子前释放采集锁。每个捕获槽增加未返回提交计数，在重新记录全部完成 fence 后才解除保护；并发 Reset/Poll、嵌套提交及已完成旧 fence 均不能提前发布或回收纹理。
+
+五项检查通过：CaptureLoader、Injector、CaptureCore、CaptureDirect_modern-late12、CaptureForward_modern-late12。CaptureCore 使用 WARP/D3D12 debug layer 验证跨线程回调不被提交锁阻塞，并验证嵌套提交期间退役的纹理保持不可发布。证据 `build-opt/test-results/pbz-lock-fix.xml`。
+
+真实重启后发现第二项兼容问题：PBZ 使用 RGBA16F 保存交织前的 SDR SBS，原采集器只接受 RGBA8/BGRA8。现在 DX12 GPU 采集原样共享 FP16 纹理，编码 GPU 用 D3D11 compute 转为 RGBA8，再走 VP 缩放/NV12/NVENC；跨 GPU 保留 FP16 COPY，全部生产像素处理在 GPU。未实现 HDR/scRGB/PQ 推断或色调映射，CPU 采集仍不支持 FP16。WARP 检查共享 FP16 像素保持不变；NvEncoderMono/NvEncoderMonoCross 检查同卡/跨卡、H.264/HEVC/AV1、SBS/左眼切换及 NVDEC 像素。证据 `pbz-float-capture.xml`、`pbz-float-core-final.xml`、`pbz-float-encoder.xml`。
+
+进入实际游戏后，本机回环验证成功：PID 47880，原始 7680×2160 GPU SBS，NVENC AV1 输出总画面 3840×2160、200 Mbps，接收 NVDEC AV1。35 秒测试发送 1972 帧；统计窗口 33.45 秒平均 58.95 FPS（含启动），稳定接收约 60 FPS。采集读入平均 0.0025 ms，编码平均 8.45 ms（含 GPU 完成等待），本机发送平均 0.41 ms。重接入 Start 17.6 ms、Stop 7.3 ms，停止后同一游戏继续渲染；截图 FPS 为采集前 65、期间 66/68、之后 62，仅作抽样，不能作为严格帧率损失测量。证据 `build-opt/test-results/pbz-live/gameplay/`。未操作远端客户端，也未重新验收另一台 LeiaSR 的观感或 LAN 性能。
+
+诊断过程中一次正常退出停在 PDAFWPluginMV 的 D3D12Backend::WaitIdle/Shutdown（`pbz-live/exit-wait.txt`），按重启授权结束测试进程，未修改该 Mod；另一次启动后退出由用户确认是手动关闭。早期诊断脚本 12 秒就中止冷启动接入，已将等待延长至 45 秒，并让发送零帧明确失败，避免只凭进程正常结束判 PASS。`fixed-loopback/result.json` 的旧 PASS 仅说明当时未死锁，该轮实际为零帧，不能当作传输成功。
 
 ## 0.8.3：接收端控制单眼传输（2026-10-26）
 

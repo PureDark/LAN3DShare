@@ -40,7 +40,7 @@ bool SetCodec(ICodecAPI* api, const GUID& property, VARTYPE type, ULONG value, s
 uint32_t PaddedHeight(const CodecConfig& config) { return (config.height + 1u) & ~1u; }
 bool SameConfig(const CodecConfig& a, const CodecConfig& b) {
     // The target bitrate is transport metadata, not a decoder format change.
-    return a.width == b.width && a.height == b.height && a.fps == b.fps && a.codec == b.codec && a.sequenceHeader == b.sequenceHeader;
+    return a.width == b.width && a.height == b.height && a.fps == b.fps && a.codec == b.codec && a.hdr == b.hdr && a.sequenceHeader == b.sequenceHeader;
 }
 HRESULT VideoType(ComPtr<IMFMediaType>& type, const CodecConfig& c, const GUID& subtype) {
     HRESULT hr = MFCreateMediaType(&type);
@@ -149,7 +149,7 @@ struct Metadata { uint64_t sequence, timestamp100ns; ContentKind kind; uint32_t 
 bool ValidConfig(const CodecConfig& c) {
     // Inbox H.264 decoder's documented Windows 8+ envelope. Individual encoder
     // configurations can still be rejected by the actual installed MFT.
-    return CodecBit(c.codec) && c.width >= 48 && !(c.width & 1) && c.width <= 4096 &&
+    return CodecBit(c.codec) && (!c.hdr || HdrCodecBit(c.codec)) && c.width >= 48 && !(c.width & 1) && c.width <= 4096 &&
         c.height >= 48 && c.height <= 2304 && c.fps >= 1 && c.fps <= 240 &&
         c.bitrate >= 64000 && c.bitrate <= 1000000000 && c.sequenceHeader.size() <= MaxSequenceHeaderBytes;
 }
@@ -157,9 +157,9 @@ const char* CodecName(CodecId codec) {
     return codec == CodecId::Av1 ? "AV1" : codec == CodecId::Hevc ? "HEVC" : codec == CodecId::H264 ? "H.264" : "Unknown";
 }
 uint32_t HardwareEncodeCapabilities() { return NvEncoder::Probe(); }
-uint32_t HardwareDecodeCapabilities() { return NvDecoder::Probe(); }
+uint32_t HardwareDecodeCapabilities(const LUID* adapter, bool includeHdr) { return NvDecoder::Probe(adapter, includeHdr); }
 bool ValidPacket(const EncodedFrame& f) {
-    return ValidConfig(f.config) && !f.data.empty() && f.data.size() <= MaxEncodedBytes &&
+    return ValidConfig(f.config) && (!f.config.hdr || f.kind == ContentKind::Desktop) && !f.data.empty() && f.data.size() <= MaxEncodedBytes &&
         (f.kind == ContentKind::Desktop || IsLeia(f.kind)) &&
         ValidDisplaySize(f.displayWidth, f.displayHeight);
 }
@@ -225,7 +225,7 @@ const CodecConfig& Encoder::config() const { return impl_->nv ? impl_->nv->confi
 bool Encoder::hardware() const { return impl_->nv != nullptr; }
 bool Encoder::Configure(const CodecConfig& config, bool hardware, std::string& error) {
     if (!hardware) {
-        if (config.codec != CodecId::H264) { error = "Software fallback supports H.264 only"; return false; }
+        if (config.hdr || config.codec != CodecId::H264) { error = "Software fallback supports SDR H.264 only"; return false; }
         return Configure(config.width, config.height, config.fps, config.bitrate, error);
     }
     auto& p = *impl_;

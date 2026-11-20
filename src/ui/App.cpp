@@ -8,6 +8,7 @@
 #include "ViewerControl.h"
 #include "PreviewChannel.h"
 #include "app/Injector.h"
+#include "capture/DesktopRegion.h"
 #include "session/PeerService.h"
 #include "nlohmann/json.hpp"
 #include <shlobj.h>
@@ -103,13 +104,14 @@ std::string ImageDataUri(Gdiplus::Image& image) {
     return output;
 }
 // Small previews stay in memory, independently of the encoded video stream.
-std::string Preview(const Display& d) {
+std::string Preview(const Display& d, bool center4k) {
     if (d.width <= 0 || d.height <= 0) return {};
     HDC screen = GetDC(nullptr), memory = CreateCompatibleDC(screen);
-    const int width = 432, height = std::clamp(width * d.height / d.width, 1, 432);
+    const auto region = SelectDesktopRegion(unsigned(d.width), unsigned(d.height), center4k);
+    const int width = 432, height = std::clamp(int(width * region.height / region.width), 1, 432);
     HBITMAP bitmap = CreateCompatibleBitmap(screen, width, height); auto old = SelectObject(memory, bitmap);
     SetStretchBltMode(memory, HALFTONE);
-    const bool copied = StretchBlt(memory, 0, 0, width, height, screen, d.bounds.left, d.bounds.top, d.width, d.height, SRCCOPY) != FALSE;
+    const bool copied = StretchBlt(memory, 0, 0, width, height, screen, d.bounds.left + int(region.x), d.bounds.top + int(region.y), int(region.width), int(region.height), SRCCOPY) != FALSE;
     SelectObject(memory, old); DeleteDC(memory); ReleaseDC(nullptr, screen);
     std::string output;
     if (copied) { Gdiplus::Bitmap image(bitmap, nullptr); output = ImageDataUri(image); }
@@ -121,7 +123,7 @@ std::string Preview(const Frame& f) {
     return ImageDataUri(image);
 }
 struct Settings {
-    std::string id, resolution{"4k"}, gpu{"auto"}, codec{"auto"};
+    std::string id, resolution{"4k"}, gpu{"auto"}, codec{"auto"}, desktopRegion{"full"};
     std::wstring name, runtime{L"C:\\Program Files\\LeiaSR\\Platform\\bin"};
     int monitor{}, fps{60}, rate{200}, receiverVolumePercent{100}; std::filesystem::path file;
     void Load(const std::filesystem::path& directory) {
@@ -133,6 +135,8 @@ struct Settings {
         GetPrivateProfileStringW(L"Client", L"EncodeGpu", L"auto", buffer, DWORD(std::size(buffer)), file.c_str()); gpu = Utf8(buffer);
         GetPrivateProfileStringW(L"Client", L"Codec", L"auto", buffer, DWORD(std::size(buffer)), file.c_str()); codec = Utf8(buffer);
         if (codec != "auto" && codec != "av1" && codec != "h264" && codec != "hevc") codec = "auto";
+        GetPrivateProfileStringW(L"Client", L"DesktopRegion", L"full", buffer, DWORD(std::size(buffer)), file.c_str()); desktopRegion = Utf8(buffer);
+        if (desktopRegion != "center4k") desktopRegion = "full";
         monitor = int(GetPrivateProfileIntW(L"Client", L"Monitor", 0, file.c_str()));
         const int old = int(GetPrivateProfileIntW(L"Client", L"Quality", 0, file.c_str()));
         resolution = old == 1 ? "1080p" : "4k"; fps = old == 1 ? 30 : 60; rate = old == 1 ? 20 : old == 2 ? 100 : old == 3 ? 400 : 200;
@@ -153,6 +157,7 @@ struct Settings {
         write(L"Monitor", std::to_wstring(monitor)); write(L"Resolution", Wide(resolution));
         write(L"FPS", std::to_wstring(fps)); write(L"BitrateMbps", std::to_wstring(rate));
         write(L"Codec", Wide(codec));
+        write(L"DesktopRegion", Wide(desktopRegion));
         write(L"ReceiverVolumePercent", std::to_wstring(receiverVolumePercent));
         return ok;
     }
@@ -202,7 +207,7 @@ struct App {
         Json m{{"type", "state"}, {"phase", phases[int(phase)]}, {"localName", Utf8(settings.name)}, {"networkReady", networkReady},
             {"note", Utf8(note)},
             {"sourceNotice", Utf8(phase == Phase::Sending ? sourceNotice : L"")},
-            {"selectedSource", selectedSource}, {"selectedPeer", selectedPeer}, {"quality", {{"res", settings.resolution}, {"fps", settings.fps}, {"rate", settings.rate}, {"codec", settings.codec}}},
+            {"selectedSource", selectedSource}, {"selectedPeer", selectedPeer}, {"quality", {{"res", settings.resolution}, {"fps", settings.fps}, {"rate", settings.rate}, {"codec", settings.codec}, {"region", settings.desktopRegion}}},
             {"settings", {{"name", Utf8(settings.name)}, {"monitor", settings.monitor}, {"gpu", settings.gpu}, {"runtime", Utf8(settings.runtime)}, {"runtimeFound", RuntimeFound(settings.runtime)}}},
             {"volumePercent", settings.receiverVolumePercent},
             {"peer", {{"name", current.name}, {"address", current.address}}}, {"busy", phase != Phase::Idle || closing}, {"contentKind", contentKind},
@@ -318,8 +323,10 @@ struct App {
                 } else if (action == "quality") {
                     auto res = j.value("res", settings.resolution); int fps = j.value("fps", settings.fps), rate = j.value("rate", settings.rate);
                     const auto codec = j.value("codec", settings.codec);
-                    if ((codec == "auto" || codec == "av1" || codec == "h264" || codec == "hevc") && (res == "720p" || res == "1080p" || res == "2k" || res == "4k") && (fps == 30 || fps == 60 || fps == 90 || fps == 120) && rate >= 0 && rate <= 1000) {
+                    const auto region = j.value("region", settings.desktopRegion);
+                    if ((region == "full" || region == "center4k") && (codec == "auto" || codec == "av1" || codec == "h264" || codec == "hevc") && (res == "720p" || res == "1080p" || res == "2k" || res == "4k") && (fps == 30 || fps == 60 || fps == 90 || fps == 120) && rate >= 0 && rate <= 1000) {
                         settings.resolution = res; settings.fps = fps; settings.rate = rate == 0 ? 0 : std::max(20, rate); settings.codec = codec;
+                        settings.desktopRegion = region; preview.clear();
                         if (!settings.Save()) SetNote(L"画质已应用，但无法保存到设置文件。");
                     }
                 } else if (action == "browseRuntime") {
@@ -369,10 +376,10 @@ struct App {
         }
         static const std::wregex sourcePattern(LR"((?:^|[\r\n])SOURCE_KIND (LeiaSbs|Desktop))");
         for (auto i = std::wsregex_iterator(log.begin(), log.end(), sourcePattern); i != std::wsregex_iterator(); ++i) contentKind = (*i)[1].str() == L"LeiaSbs" ? "sbs" : "desktop";
-        static const std::wregex encoderPattern(LR"((?:^|[\r\n])ENCODER (NVENC|Software) (AV1|HEVC|H\.264) (SBS|LeftEye|Desktop) ([0-9]+)x([0-9]+) target=([0-9]+)fps/([0-9]+)Mbps)");
+        static const std::wregex encoderPattern(LR"((?:^|[\r\n])ENCODER (NVENC|Software) (AV1|HEVC|H\.264) (SBS|LeftEye|Desktop) ([0-9]+)x([0-9]+) target=([0-9]+)fps/([0-9]+)Mbps(?: gpu_shared=1)?( HDR10)?)");
         for (auto i = std::wsregex_iterator(log.begin(), log.end(), encoderPattern); i != std::wsregex_iterator(); ++i) {
             const auto& s = *i;
-            encodingSummary = (s[1].str() == L"NVENC" ? L"NVENC " : L"软件回退 · ") + s[2].str() + L" · " + s[4].str() + L"×" + s[5].str() + L" · 目标 " + s[6].str() + L" FPS / " + s[7].str() + L" Mbps";
+            encodingSummary = (s[1].str() == L"NVENC" ? L"NVENC " : L"软件回退 · ") + s[2].str() + s[8].str() + L" · " + s[4].str() + L"×" + s[5].str() + L" · 目标 " + s[6].str() + L" FPS / " + s[7].str() + L" Mbps";
             contentKind = s[3].str() == L"SBS" ? "sbs" : s[3].str() == L"LeftEye" ? "left" : "desktop";
         }
         if (settings.rate == 0 && phase == Phase::Sending) {
@@ -387,6 +394,7 @@ struct App {
             const auto state = Json::parse(Utf8((*i)[1].str()), nullptr, false); if (state.is_discarded()) continue;
             contentKind = state.value("leftEyeOnly", false) ? "left" : state.value("kind", std::string("desktop"));
             encodingSummary = std::to_wstring(state.value("width", 0)) + L"×" + std::to_wstring(state.value("height", 0)) + L" · " + std::to_wstring(state.value("receivingFps", 0)) + L" FPS";
+            if (state.value("hdr", false)) encodingSummary += L" · HDR10";
             videoRecovering = state.value("recovering", false);
         }
     }
@@ -416,6 +424,7 @@ struct App {
         }
         else {
             args.insert(args.end(), {L"--desktop-monitor", std::to_wstring(input.monitor)});
+            if (input.kind == Source::Screen && settings.desktopRegion == "center4k") args.push_back(L"--desktop-center-4k");
             if (!testDesktop) args.push_back(L"--auto-source");
             if (input.kind == Source::Process) args.insert(args.end(), {L"--pid", std::to_wstring(input.pid)});
             else if (input.kind == Source::Program) args.insert(args.end(), {L"--launch", input.path});
@@ -432,6 +441,7 @@ struct App {
         std::vector<std::wstring> args{L"--profile", L"--connect", Wide(event.peer.address), L"--port", std::to_wstring(event.mediaPort), L"--session-token", Wide(token),
             L"--volume-percent", std::to_wstring(settings.receiverVolumePercent),
             L"--auto-display", L"--monitor", std::to_wstring(monitor), L"--runtime-dir", settings.runtime, L"--peer-name", Wide(current.name), L"--parent-window", std::to_wstring(reinterpret_cast<uintptr_t>(window))};
+        if (event.peer.hdrMedia) args.push_back(L"--hdr-peer");
         if (!testRole.empty()) args.push_back(L"--hidden");
         std::wstring error;
         if (!worker.Start(executable, WorkerMode::Receiver, args, error, dataDir / L"logs")) { service.Reply(incoming, false, Utf8(error), ignored); current = {}; token.clear(); incoming = 0; SetNote(L"无法打开接收画面：" + error); return; }
@@ -481,7 +491,7 @@ struct App {
             if (!smoke) RefreshPeers();
             if (!smoke && testRole.empty() && phase == Phase::Idle && IsWindowVisible(window) && !IsIconic(window)) {
                 const auto source = std::find_if(sources.begin(), sources.end(), [&](const Source& s) { return s.id == selectedSource && s.kind == Source::Screen; });
-                if (source != sources.end() && source->monitor < displays.size()) preview = Preview(displays[source->monitor]); else preview.clear();
+                if (source != sources.end() && source->monitor < displays.size()) preview = Preview(displays[source->monitor], settings.desktopRegion == "center4k"); else preview.clear();
             }
             if (phase == Phase::Sending || phase == Phase::Receiving) {
                 PreviewImage thumbnail;
